@@ -33,8 +33,8 @@ class LogsPage extends StatelessWidget {
                             color: AppColors.textSecondary,
                             letterSpacing: 1.6)),
                     const SizedBox(height: 5),
-                    Text('Readings Log',
-                        style: const TextStyle(
+                    const Text('Readings Log',
+                        style: TextStyle(
                             fontFamily: 'Outfit',
                             fontSize: 24,
                             fontWeight: FontWeight.w700,
@@ -85,7 +85,7 @@ class LogsPage extends StatelessWidget {
 
             Row(
               children: [
-                Icon(Icons.history_rounded, size: 13, color: AppColors.purple),
+                const Icon(Icons.history_rounded, size: 13, color: AppColors.purple),
                 const SizedBox(width: 6),
                 Text('RECENT READINGS',
                     style: AppType.mono(9,
@@ -104,7 +104,7 @@ class LogsPage extends StatelessWidget {
                   padding: const EdgeInsets.symmetric(vertical: 30),
                   child: Column(
                     children: [
-                      Icon(Icons.schedule_rounded,
+                      const Icon(Icons.schedule_rounded,
                           size: 26, color: AppColors.textMuted),
                       const SizedBox(height: 10),
                       Text('No readings yet',

@@ -1,8 +1,9 @@
+import 'dart:convert';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
 
-import '../data/energy_provider.dart' show EnergyDataSource;
+import '../data/energy_provider.dart' show EnergyDataSource, EnergyProvider;
 import '../data/energy_scope.dart';
 import '../data/overlay_overrides.dart';
 import '../scene/scene.dart';
@@ -78,8 +79,8 @@ class _SettingsPageState extends State<SettingsPage> {
                             color: AppColors.textSecondary,
                             letterSpacing: 1.6)),
                     const SizedBox(height: 5),
-                    Text('Settings',
-                        style: const TextStyle(
+                    const Text('Settings',
+                        style: TextStyle(
                             fontFamily: 'Outfit',
                             fontSize: 24,
                             fontWeight: FontWeight.w700,
@@ -194,7 +195,7 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
 
             // ── Changeover control ──────────────────────────────────
-            SectionHeader(
+            const SectionHeader(
                 icon: Icons.swap_horiz_rounded,
                 color: AppColors.home,
                 title: 'Changeover Control'),
@@ -261,7 +262,7 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
 
             // ── Billing cycle baselines ─────────────────────────────
-            SectionHeader(
+            const SectionHeader(
                 icon: Icons.calendar_today_rounded,
                 color: AppColors.info,
                 title: 'Billing Cycle Baselines'),
@@ -366,7 +367,7 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
 
             // ── Manual meter readings ───────────────────────────────
-            SectionHeader(
+            const SectionHeader(
                 icon: Icons.edit_note_rounded,
                 color: AppColors.purple,
                 title: 'Manual Meter Readings'),
@@ -383,8 +384,8 @@ class _SettingsPageState extends State<SettingsPage> {
                     ],
                   ),
                   const SizedBox(height: 8),
-                  Text('Log current readings',
-                      style: const TextStyle(
+                  const Text('Log current readings',
+                      style: TextStyle(
                           fontFamily: 'Outfit',
                           fontSize: 16,
                           fontWeight: FontWeight.w700,
@@ -440,7 +441,7 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
 
             // ── Last month total ────────────────────────────────────
-            SectionHeader(
+            const SectionHeader(
                 icon: Icons.bar_chart_rounded,
                 color: AppColors.home,
                 title: 'Last Month Total'),
@@ -527,7 +528,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   const SizedBox(height: 14),
                   Row(
                     children: [
-                      Icon(Icons.auto_awesome_rounded,
+                      const Icon(Icons.auto_awesome_rounded,
                           size: 13, color: AppColors.purple),
                       const SizedBox(width: 6),
                       Text('AI Trend Impact',
@@ -550,7 +551,7 @@ class _SettingsPageState extends State<SettingsPage> {
             _OverlayEditorCard(provider: p),
 
             // ── Floating overlay ────────────────────────────────────
-            SectionHeader(
+            const SectionHeader(
                 icon: Icons.picture_in_picture_alt_rounded,
                 color: AppColors.warning,
                 title: 'Floating Overlay'),
@@ -890,4 +891,698 @@ class _SemiGaugePainter extends CustomPainter {
   @override
   bool shouldRepaint(_SemiGaugePainter old) =>
       old.frac != frac || old.color != color;
+}
+
+/// Placeholder for the scene overlay editor. The full editor UI is not yet
+/// wired up; this renders a stub card so the settings page compiles and the
+/// section is visible. Replace with the real positioning controls.
+class _OverlayEditorCard extends StatefulWidget {
+  final EnergyProvider provider;
+  const _OverlayEditorCard({required this.provider});
+
+  @override
+  State<_OverlayEditorCard> createState() => _OverlayEditorCardState();
+}
+
+class _OverlayEditorCardState extends State<_OverlayEditorCard> {
+  HeroSceneId? _selectedScene;
+  EditableOverlayConfig? _config;
+  _OverlayLayer _layer = _OverlayLayer.solarPath;
+  bool _loading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedScene = widget.provider.scene;
+    _loadConfig();
+  }
+
+  Future<void> _loadConfig() async {
+    if (_selectedScene == null) return;
+    setState(() => _loading = true);
+    final cfg = await widget.provider.editableOverlay(_selectedScene!);
+    if (mounted) {
+      setState(() {
+        _config = cfg;
+        _loading = false;
+      });
+    }
+  }
+
+  void _onChanged() => widget.provider.notifyOverlayChanged();
+
+  @override
+  Widget build(BuildContext context) {
+    final p = widget.provider;
+    return GlassCard(
+      scene: p.scene,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              _dotLabel('OVERLAY POSITIONS', color: AppColors.purple),
+              _pill(
+                  p.overlayEditorActive ? 'LIVE' : 'IDLE',
+                  p.overlayEditorActive
+                      ? AppColors.purple
+                      : AppColors.textMuted,
+                  filled: p.overlayEditorActive),
+            ],
+          ),
+          const SizedBox(height: 8),
+          const Text('Scene Line Positioning',
+              style: TextStyle(
+                  fontFamily: 'Outfit',
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.textPrimary,
+                  letterSpacing: -0.3)),
+          const SizedBox(height: 2),
+          Text(
+              'Adjust the X/Y coordinates of flow wires, labels, and icons for the hero energy scene overlay.',
+              style: AppType.inter(8.5,
+                  color: AppColors.textMuted, height: 1.4)),
+          const SizedBox(height: 12),
+
+          // Scene selector + editor toggle
+          _overlay(
+            padding: const EdgeInsets.all(10),
+            child: Column(
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: _SceneDropdown(
+                        value: _selectedScene,
+                        onChanged: (s) {
+                          setState(() => _selectedScene = s);
+                          _loadConfig();
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    GestureDetector(
+                      onTap: () =>
+                          p.setOverlayEditorActive(!p.overlayEditorActive),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: (p.overlayEditorActive
+                                  ? AppColors.purple
+                                  : AppColors.textMuted)
+                              .withValues(alpha: 0.16),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                                p.overlayEditorActive
+                                    ? Icons.visibility_rounded
+                                    : Icons.visibility_off_rounded,
+                                size: 12,
+                                color: p.overlayEditorActive
+                                    ? AppColors.purple
+                                    : AppColors.textMuted),
+                            const SizedBox(width: 4),
+                            Text(
+                                p.overlayEditorActive ? 'Live' : 'Edit',
+                                style: AppType.inter(9,
+                                    color: p.overlayEditorActive
+                                        ? AppColors.purple
+                                        : AppColors.textMuted,
+                                    weight: FontWeight.w700)),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                // Layer selector
+                Row(
+                  children: _OverlayLayer.values.map((l) {
+                    final active = l == _layer;
+                    return Expanded(
+                      child: GestureDetector(
+                        onTap: () => setState(() => _layer = l),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(vertical: 7),
+                          decoration: BoxDecoration(
+                            color: active
+                                ? AppColors.purple.withValues(alpha: 0.16)
+                                : Colors.transparent,
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Text(l.label,
+                              textAlign: TextAlign.center,
+                              style: AppType.inter(8,
+                                  color: active
+                                      ? AppColors.purple
+                                      : AppColors.textSecondary,
+                                  weight: FontWeight.w700)),
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          // Editor body
+          if (_loading)
+            const Center(
+                child: Padding(
+              padding: EdgeInsets.all(20),
+              child: SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2)),
+            ))
+          else if (_config != null)
+            _buildLayerEditor(_config!),
+
+          const SizedBox(height: 10),
+
+          // Actions: Reset + Export
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: _selectedScene == null
+                      ? null
+                      : () async {
+                          await p.resetOverlay(_selectedScene!);
+                          _loadConfig();
+                        },
+                  icon: const Icon(Icons.refresh_rounded, size: 13),
+                  label: const Text('Reset to defaults'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.danger,
+                    side: BorderSide(
+                        color: AppColors.danger.withValues(alpha: 0.4)),
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    textStyle:
+                        AppType.inter(9.5, weight: FontWeight.w700),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: FilledButton.icon(
+                  onPressed: _config == null
+                      ? null
+                      : () => _exportJson(_config!),
+                  icon: const Icon(Icons.download_rounded, size: 13),
+                  label: const Text('Export JSON'),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: AppColors.purple,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    textStyle:
+                        AppType.inter(9.5, weight: FontWeight.w700),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLayerEditor(EditableOverlayConfig cfg) {
+    return switch (_layer) {
+      _OverlayLayer.solarPath => _PathEditor(
+          points: cfg.solarPath,
+          viewBox: cfg.viewBox,
+          onChanged: _onChanged,
+          label: 'Solar Wire'),
+      _OverlayLayer.gridPath => _PathEditor(
+          points: cfg.gridPath,
+          viewBox: cfg.viewBox,
+          onChanged: _onChanged,
+          label: 'Grid Wire'),
+      _OverlayLayer.inverterOutputPath => _PathEditor(
+          points: cfg.inverterOutputPath,
+          viewBox: cfg.viewBox,
+          onChanged: _onChanged,
+          label: 'Inverter Wire'),
+      _OverlayLayer.labels =>
+        _LabelsEditor(cfg: cfg, onChanged: _onChanged),
+      _OverlayLayer.icons =>
+        _IconsEditor(cfg: cfg, onChanged: _onChanged),
+    };
+  }
+
+  void _exportJson(EditableOverlayConfig cfg) {
+    final json = cfg.toJson();
+    const encoder = JsonEncoder.withIndent('  ');
+    final text = encoder.convert(json);
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        title: Text('Overlay JSON',
+            style: AppType.inter(14,
+                color: AppColors.textPrimary, weight: FontWeight.w700)),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: SingleChildScrollView(
+            child: SelectableText(text,
+                style: AppType.mono(9, color: AppColors.textSecondary)),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text('Close',
+                style: AppType.inter(11, color: AppColors.purple)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── Solar-style helpers ───────────────────────────────────────────
+  Widget _dotLabel(String label, {Color? color}) {
+    final c = color ?? AppColors.textSecondary;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+            width: 5,
+            height: 5,
+            decoration: BoxDecoration(
+                color: c, borderRadius: BorderRadius.circular(2.5))),
+        const SizedBox(width: 4),
+        Text(label,
+            style: AppType.inter(8,
+                color: AppColors.textSecondary,
+                weight: FontWeight.w600,
+                letterSpacing: 0.3)),
+      ],
+    );
+  }
+
+  Widget _pill(String text, Color color, {bool filled = false}) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+      decoration: BoxDecoration(
+        color: filled ? color : color.withValues(alpha: 0.18),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Text(text,
+          style: AppType.inter(8,
+              color: filled ? Colors.black : color,
+              weight: FontWeight.w700)),
+    );
+  }
+
+  Widget _overlay({
+    required Widget child,
+    EdgeInsets padding = const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+  }) {
+    return Container(
+      padding: padding,
+      decoration: BoxDecoration(
+        color: AppColors.textPrimary.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: child,
+    );
+  }
+}
+
+enum _OverlayLayer {
+  solarPath('Solar Wire'),
+  gridPath('Grid Wire'),
+  inverterOutputPath('Inverter Wire'),
+  labels('Labels'),
+  icons('Icons');
+
+  final String label;
+  const _OverlayLayer(this.label);
+}
+
+/// Scene selector dropdown.
+class _SceneDropdown extends StatelessWidget {
+  final HeroSceneId? value;
+  final ValueChanged<HeroSceneId?> onChanged;
+  const _SceneDropdown({required this.value, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceAlt,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: DropdownButton<HeroSceneId>(
+        value: value,
+        isExpanded: true,
+        underline: const SizedBox.shrink(),
+        dropdownColor: AppColors.surface,
+        style: AppType.inter(10, color: AppColors.textPrimary),
+        items: HeroSceneId.values.map((s) {
+          return DropdownMenuItem(
+            value: s,
+            child: Text(s.id,
+                style: AppType.inter(10, color: AppColors.textPrimary)),
+          );
+        }).toList(),
+        onChanged: onChanged,
+      ),
+    );
+  }
+}
+
+/// Path point editor — X/Y sliders for each point in a wire polyline.
+class _PathEditor extends StatelessWidget {
+  final List<EditablePoint> points;
+  final OverlayViewBox viewBox;
+  final VoidCallback onChanged;
+  final String label;
+
+  const _PathEditor({
+    required this.points,
+    required this.viewBox,
+    required this.onChanged,
+    required this.label,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('$label — ${points.length} points',
+            style: AppType.inter(9,
+                color: AppColors.textSecondary, weight: FontWeight.w700)),
+        const SizedBox(height: 8),
+        ...List.generate(points.length, (i) {
+          final pt = points[i];
+          return _PointRow(
+            index: i,
+            point: pt,
+            maxX: viewBox.width,
+            maxY: viewBox.height,
+            onChanged: onChanged,
+          );
+        }),
+      ],
+    );
+  }
+}
+
+/// Single point X/Y slider row.
+class _PointRow extends StatelessWidget {
+  final int index;
+  final EditablePoint point;
+  final double maxX, maxY;
+  final VoidCallback onChanged;
+  const _PointRow({
+    required this.index,
+    required this.point,
+    required this.maxX,
+    required this.maxY,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Container(
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: AppColors.textPrimary.withValues(alpha: 0.04),
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Point ${index + 1}',
+                style: AppType.mono(8,
+                    color: AppColors.textMuted, letterSpacing: 0.5)),
+            const SizedBox(height: 4),
+            _AxisSlider(
+              label: 'X',
+              value: point.x,
+              max: maxX,
+              onChanged: (v) {
+                point.x = v;
+                onChanged();
+              },
+            ),
+            const SizedBox(height: 2),
+            _AxisSlider(
+              label: 'Y',
+              value: point.y,
+              max: maxY,
+              onChanged: (v) {
+                point.y = v;
+                onChanged();
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Single axis slider with live value display.
+class _AxisSlider extends StatelessWidget {
+  final String label;
+  final double value;
+  final double max;
+  final ValueChanged<double> onChanged;
+  const _AxisSlider({
+    required this.label,
+    required this.value,
+    required this.max,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        SizedBox(
+          width: 14,
+          child: Text(label,
+              style: AppType.mono(8,
+                  color: AppColors.textMuted, weight: FontWeight.w700)),
+        ),
+        Expanded(
+          child: SliderTheme(
+            data: SliderThemeData(
+              activeTrackColor: AppColors.purple.withValues(alpha: 0.5),
+              inactiveTrackColor: AppColors.border,
+              thumbColor: AppColors.purple,
+              overlayColor: AppColors.purple.withValues(alpha: 0.2),
+              trackHeight: 2,
+              thumbShape:
+                  const RoundSliderThumbShape(enabledThumbRadius: 5),
+            ),
+            child: Slider(
+              value: value.clamp(0, max),
+              min: 0,
+              max: max,
+              divisions: max.round(),
+              onChanged: onChanged,
+            ),
+          ),
+        ),
+        SizedBox(
+          width: 38,
+          child: Text(value.round().toString(),
+              textAlign: TextAlign.right,
+              style: AppType.mono(8,
+                  color: AppColors.textPrimary, weight: FontWeight.w700)),
+        ),
+      ],
+    );
+  }
+}
+
+/// Labels editor — X/Y for solar, grid, home labels.
+class _LabelsEditor extends StatelessWidget {
+  final EditableOverlayConfig cfg;
+  final VoidCallback onChanged;
+  const _LabelsEditor({required this.cfg, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _LabelRow(
+            name: 'Solar',
+            label: cfg.solarLabel,
+            maxX: cfg.viewBox.width,
+            maxY: cfg.viewBox.height,
+            onChanged: onChanged),
+        _LabelRow(
+            name: 'Grid',
+            label: cfg.gridLabel,
+            maxX: cfg.viewBox.width,
+            maxY: cfg.viewBox.height,
+            onChanged: onChanged),
+        _LabelRow(
+            name: 'Home',
+            label: cfg.homeLabel,
+            maxX: cfg.viewBox.width,
+            maxY: cfg.viewBox.height,
+            onChanged: onChanged),
+      ],
+    );
+  }
+}
+
+class _LabelRow extends StatelessWidget {
+  final String name;
+  final EditableLabel label;
+  final double maxX, maxY;
+  final VoidCallback onChanged;
+  const _LabelRow({
+    required this.name,
+    required this.label,
+    required this.maxX,
+    required this.maxY,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Container(
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: AppColors.textPrimary.withValues(alpha: 0.04),
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('$name Label',
+                style: AppType.inter(9,
+                    color: AppColors.textSecondary,
+                    weight: FontWeight.w700)),
+            const SizedBox(height: 4),
+            _AxisSlider(
+                label: 'X',
+                value: label.x,
+                max: maxX,
+                onChanged: (v) {
+                  label.x = v;
+                  onChanged();
+                }),
+            const SizedBox(height: 2),
+            _AxisSlider(
+                label: 'Y',
+                value: label.y,
+                max: maxY,
+                onChanged: (v) {
+                  label.y = v;
+                  onChanged();
+                }),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Icons editor — X/Y for inverter and db-box icons.
+class _IconsEditor extends StatelessWidget {
+  final EditableOverlayConfig cfg;
+  final VoidCallback onChanged;
+  const _IconsEditor({required this.cfg, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _IconRow(
+            name: 'Inverter',
+            point: cfg.inverterPos,
+            maxX: cfg.viewBox.width,
+            maxY: cfg.viewBox.height,
+            onChanged: onChanged),
+        _IconRow(
+            name: 'DB Box',
+            point: cfg.dbBoxPos,
+            maxX: cfg.viewBox.width,
+            maxY: cfg.viewBox.height,
+            onChanged: onChanged),
+      ],
+    );
+  }
+}
+
+class _IconRow extends StatelessWidget {
+  final String name;
+  final EditablePoint point;
+  final double maxX, maxY;
+  final VoidCallback onChanged;
+  const _IconRow({
+    required this.name,
+    required this.point,
+    required this.maxX,
+    required this.maxY,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Container(
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: AppColors.textPrimary.withValues(alpha: 0.04),
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('$name Icon',
+                style: AppType.inter(9,
+                    color: AppColors.textSecondary,
+                    weight: FontWeight.w700)),
+            const SizedBox(height: 4),
+            _AxisSlider(
+                label: 'X',
+                value: point.x,
+                max: maxX,
+                onChanged: (v) {
+                  point.x = v;
+                  onChanged();
+                }),
+            const SizedBox(height: 2),
+            _AxisSlider(
+                label: 'Y',
+                value: point.y,
+                max: maxY,
+                onChanged: (v) {
+                  point.y = v;
+                  onChanged();
+                }),
+          ],
+        ),
+      ),
+    );
+  }
 }

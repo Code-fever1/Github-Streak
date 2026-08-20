@@ -169,7 +169,7 @@ class LoadGauge extends StatelessWidget {
                     width: idle,
                     height: 14,
                     child: _zone(AppColors.textMuted.withValues(alpha: 0.16),
-                        BorderRadius.horizontal(left: Radius.circular(7)))),
+                        const BorderRadius.horizontal(left: Radius.circular(7)))),
                 Positioned(
                     left: idle,
                     width: normal,
@@ -181,7 +181,7 @@ class LoadGauge extends StatelessWidget {
                     width: high,
                     height: 14,
                     child: _zone(AppColors.danger.withValues(alpha: 0.16),
-                        BorderRadius.horizontal(right: Radius.circular(7)))),
+                        const BorderRadius.horizontal(right: Radius.circular(7)))),
                 Positioned(
                   left: 0,
                   width: max(8, w * pct),

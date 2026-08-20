@@ -20,7 +20,7 @@ class MetersPage extends StatelessWidget {
     final m2 = p.meter('meter2');
     final home = p.home;
     final active = p.activeMeter == 'meter1' ? m1 : m2;
-    final totalTarget = 400.0;
+    const totalTarget = 400.0;
     final totalRemaining = m1.remainingUnits + m2.remainingUnits;
     final totalUsed = (m1.targetUnits - m1.remainingUnits) +
         (m2.targetUnits - m2.remainingUnits);
@@ -33,7 +33,7 @@ class MetersPage extends StatelessWidget {
         ListView(
           padding: const EdgeInsets.fromLTRB(16, 18, 16, 120),
           children: [
-            _PageHeader(
+            const _PageHeader(
                 title: 'Energy',
                 subtitle:
                     'Meter tracking, usage comparison & changeover control'),
@@ -121,7 +121,7 @@ class MetersPage extends StatelessWidget {
                   // Card header
                   Row(
                     children: [
-                      Icon(Icons.auto_awesome_rounded,
+                      const Icon(Icons.auto_awesome_rounded,
                           size: 13, color: AppColors.purple),
                       const SizedBox(width: 6),
                       Text('AI Forecast & Budget',
@@ -191,7 +191,7 @@ class MetersPage extends StatelessWidget {
                               TextSpan(
                                   text: '  units',
                                   style: AppType.inter(11,
-                                      color: Color(0xFFD3E4D4),
+                                      color: const Color(0xFFD3E4D4),
                                       weight: FontWeight.w600)),
                             ],
                           ),
@@ -305,9 +305,9 @@ class MetersPage extends StatelessWidget {
                   // ── Cumulative usage chart ──
                   Row(
                     children: [
-                      _LegendDot(color: AppColors.home, label: 'Actual'),
+                      const _LegendDot(color: AppColors.home, label: 'Actual'),
                       const SizedBox(width: 10),
-                      _LegendDot(
+                      const _LegendDot(
                           color: AppColors.warning, label: 'Forecast'),
                       const Spacer(),
                       Text('CUMULATIVE USAGE',
@@ -411,7 +411,7 @@ class MetersPage extends StatelessWidget {
                 children: [
                   Row(
                     children: [
-                      Icon(Icons.show_chart_rounded,
+                      const Icon(Icons.show_chart_rounded,
                           size: 13, color: AppColors.purple),
                       const SizedBox(width: 6),
                       Text('Smart Tips',
@@ -422,14 +422,14 @@ class MetersPage extends StatelessWidget {
                     ],
                   ),
                   const SizedBox(height: 12),
-                  _Tip(
+                  const _Tip(
                     icon: Icons.wb_sunny_rounded,
                     color: AppColors.solar,
                     title: 'Meter 1 (Analog) is more efficient.',
                     body: 'Saving ~15% units (4.5 units/month) vs Meter 2.',
                   ),
                   const Divider(color: AppColors.border, height: 20),
-                  _Tip(
+                  const _Tip(
                     icon: Icons.speed_rounded,
                     color: AppColors.info,
                     title: 'Usage pace is on target.',
@@ -728,7 +728,7 @@ class _MeterCard extends StatelessWidget {
                       ],
                     ),
                   ),
-                  VerticalDivider(
+                  const VerticalDivider(
                     width: 1,
                     color: AppColors.border,
                     indent: 0,
@@ -882,7 +882,7 @@ class _CumulativePainter extends CustomPainter {
     }
 
     // Actual: linear from 0 → used at (elapsed = 22/30)
-    final elapsedFrac = 22 / 30;
+    const elapsedFrac = 22 / 30;
     final actual = Path()
       ..moveTo(0, yOf(0))
       ..lineTo(w * elapsedFrac, yOf(used));

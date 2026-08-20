@@ -326,7 +326,7 @@ DashboardSnapshot applyOfflineManualReading(
   );
 
   final log = ManualLog(
-    id: 'offline-${ts}',
+    id: 'offline-$ts',
     timestamp: ts,
     meterId: meterId,
     reading: reading,
@@ -350,7 +350,7 @@ DashboardSnapshot applyOfflineBaseline(
 }) {
   final ts = timestamp ?? DateTime.now().millisecondsSinceEpoch;
   final log = ManualLog(
-    id: 'baseline-offline-${cycleStartTs}',
+    id: 'baseline-offline-$cycleStartTs',
     timestamp: ts,
     meterId: meterId,
     reading: reading,

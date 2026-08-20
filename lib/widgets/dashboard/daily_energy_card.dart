@@ -78,7 +78,7 @@ class DailyEnergyCard extends StatelessWidget {
                       color: AppColors.success.withValues(alpha: 0.12),
                       borderRadius: BorderRadius.circular(12),
                     ),
-                    child: Icon(Icons.eco_rounded,
+                    child: const Icon(Icons.eco_rounded,
                         size: 20, color: AppColors.success),
                   ),
                   const SizedBox(width: 12),

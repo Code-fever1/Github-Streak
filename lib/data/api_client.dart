@@ -249,7 +249,7 @@ class ApiClient {
   /// subscription is cancelled.
   Stream<LivePayload> liveStream() {
     var cancelled = false;
-    late void Function() _schedule;
+    late void Function() schedule;
     late final StreamController<LivePayload> controller;
 
     void connect() {
@@ -292,19 +292,19 @@ class ApiClient {
                   }
                 }, onError: (Object _) {
                   client.close(force: true);
-                  _schedule();
+                  schedule();
                 }, onDone: () {
                   client.close(force: true);
-                  _schedule();
+                  schedule();
                 });
           })
           .catchError((Object _) {
             client.close(force: true);
-            _schedule();
+            schedule();
           });
     }
 
-_schedule = () {
+schedule = () {
       if (cancelled) return;
       Timer(const Duration(seconds: 3), connect);
     };

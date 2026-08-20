@@ -41,8 +41,8 @@ class _SummaryPageState extends State<SummaryPage> {
                             color: AppColors.textSecondary,
                             letterSpacing: 1.6)),
                     const SizedBox(height: 5),
-                    Text('Summary',
-                        style: const TextStyle(
+                    const Text('Summary',
+                        style: TextStyle(
                             fontFamily: 'Outfit',
                             fontSize: 24,
                             fontWeight: FontWeight.w700,
@@ -135,7 +135,7 @@ class _UsageTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final days = [5.4, 5.1, 6.0, 5.7, 5.8, 6.2, home.todayUsage];
-    final labels = const ['Wed', 'Thu', 'Fri', 'Sat', 'Sun', 'Mon', 'Tue'];
+    const labels = ['Wed', 'Thu', 'Fri', 'Sat', 'Sun', 'Mon', 'Tue'];
     final avg = home.averageDaily;
     final maxV = days.fold<double>(0, (m, v) => max(m, v));
     final trendPct = home.trend == 'decreasing'
@@ -153,7 +153,7 @@ class _UsageTab extends StatelessWidget {
             children: [
               Row(
                 children: [
-                  Icon(Icons.show_chart_rounded,
+                  const Icon(Icons.show_chart_rounded,
                       size: 13, color: AppColors.purple),
                   const SizedBox(width: 6),
                   Text('USAGE SUMMARY',
@@ -582,7 +582,7 @@ class _MeterTab extends StatelessWidget {
               ),
               child: Row(
                 children: [
-                  Icon(Icons.check_circle_rounded,
+                  const Icon(Icons.check_circle_rounded,
                       size: 14, color: AppColors.success),
                   const SizedBox(width: 8),
                   Expanded(

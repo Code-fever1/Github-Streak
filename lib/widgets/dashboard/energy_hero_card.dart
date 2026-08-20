@@ -42,7 +42,7 @@ class EnergyHeroCard extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
+                const Text(
                   'Solar Panel',
                   style: TextStyle(
                     fontFamily: 'Inter',
@@ -57,7 +57,7 @@ class EnergyHeroCard extends StatelessWidget {
                   isGenerating
                       ? 'Generating Clean Energy'
                       : 'Low Generation',
-                  style: TextStyle(
+                  style: const TextStyle(
                     fontFamily: 'Inter',
                     fontSize: 12,
                     fontWeight: FontWeight.w500,
@@ -75,14 +75,14 @@ class EnergyHeroCard extends StatelessWidget {
                         color: AppColors.success.withValues(alpha: 0.12),
                         borderRadius: BorderRadius.circular(9),
                       ),
-                      child: Icon(Icons.bolt_rounded,
+                      child: const Icon(Icons.bolt_rounded,
                           size: 16, color: AppColors.success),
                     ),
                     const SizedBox(width: 10),
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
+                        const Text(
                           'Live Generation',
                           style: TextStyle(
                             fontFamily: 'Inter',
@@ -95,7 +95,7 @@ class EnergyHeroCard extends StatelessWidget {
                         const SizedBox(height: 1),
                         Text(
                           _formatted,
-                          style: TextStyle(
+                          style: const TextStyle(
                             fontFamily: 'Inter',
                             fontSize: 28,
                             fontWeight: FontWeight.w700,

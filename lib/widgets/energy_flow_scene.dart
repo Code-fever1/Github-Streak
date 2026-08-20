@@ -146,19 +146,19 @@ class _EnergyFlowSceneState extends State<EnergyFlowScene>
 
           // Solar node
           Positioned(left: solarX - 19, top: nodeY - 19,
-            child: _NodeIcon(icon: Icons.wb_sunny_rounded, color: AppColors.solar)),
+            child: const _NodeIcon(icon: Icons.wb_sunny_rounded, color: AppColors.solar)),
           Positioned(left: solarX - 34, top: labelY,
             child: _PowerLabel(power: solarW, color: AppColors.solar)),
 
           // Grid node
           Positioned(left: gridX - 19, top: nodeY - 19,
-            child: _NodeIcon(icon: Icons.cell_tower_rounded, color: AppColors.grid)),
+            child: const _NodeIcon(icon: Icons.cell_tower_rounded, color: AppColors.grid)),
           Positioned(left: gridX - 34, top: labelY,
             child: _PowerLabel(power: gridW, color: AppColors.grid)),
 
           // Home node
           Positioned(left: homeX - 19, top: nodeY - 19,
-            child: _NodeIcon(icon: Icons.home_rounded, color: AppColors.home)),
+            child: const _NodeIcon(icon: Icons.home_rounded, color: AppColors.home)),
           Positioned(left: homeX - 34, top: labelY,
             child: _PowerLabel(power: homeW, color: AppColors.home)),
 
@@ -211,7 +211,7 @@ class _PowerLabel extends StatelessWidget {
           Text.rich(
             TextSpan(
               text: value,
-              style: TextStyle(fontFamily: 'Outfit', fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: -0.4),
+              style: const TextStyle(fontFamily: 'Outfit', fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: -0.4),
               children: [
                 TextSpan(text: ' $unit', style: TextStyle(fontFamily: 'Outfit', fontSize: 9, fontWeight: FontWeight.w600, color: color)),
               ],

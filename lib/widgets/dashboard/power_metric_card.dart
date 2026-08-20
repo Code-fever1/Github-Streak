@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 
 import '../../scene/scene.dart';
-import '../../theme/app_colors.dart';
 
 /// Half-width metric card (Home Usage / Grid Status etc.) — glassmorphism.
 class PowerMetricCard extends StatelessWidget {

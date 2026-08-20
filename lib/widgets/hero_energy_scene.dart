@@ -9,7 +9,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
-import '../data/energy_provider.dart' show EnergyDataSource, EnergyProvider;
+import '../data/energy_provider.dart' show EnergyDataSource;
 import '../data/energy_scope.dart';
 import '../scene/scene.dart';
 import '../theme/app_colors.dart';
@@ -132,7 +132,7 @@ class _HeroEnergySceneState extends State<HeroEnergyScene>
   }
 
   Map<WireKind, WireFlowState> _flows() {
-    final idleOpacity = 0.0;
+    const idleOpacity = 0.0;
     return {
       WireKind.solar: WireFlowState(
         active: !widget.systemOffline && widget.solarW >= 20,
@@ -179,7 +179,7 @@ class _HeroEnergySceneState extends State<HeroEnergyScene>
                   BoxShadow(color: Color(0x66000000), blurRadius: 8),
                 ],
               ),
-              child: Icon(Icons.bolt_rounded, size: 15, color: AppColors.info),
+              child: const Icon(Icons.bolt_rounded, size: 15, color: AppColors.info),
             ),
           ),
           Positioned(
@@ -191,7 +191,7 @@ class _HeroEnergySceneState extends State<HeroEnergyScene>
                 shape: BoxShape.circle,
                 border: Border.all(color: AppColors.textMuted.withValues(alpha: 0.35)),
               ),
-              child: Icon(Icons.grid_view_rounded, size: 13, color: AppColors.textMuted),
+              child: const Icon(Icons.grid_view_rounded, size: 13, color: AppColors.textMuted),
             ),
           ),
         ],
@@ -424,7 +424,7 @@ class _OverlayPainter extends CustomPainter {
     final maxMs = style.maxDurationMs ?? 3000;
     final ceiling = style.powerCeilingW ?? 2500;
     final durMs = flowDurationFromPower(flow.power, minMs, maxMs, ceiling);
-    final refMs = 4000.0;
+    const refMs = 4000.0;
     final speed = refMs / durMs.clamp(200, 12000);
 
     for (var k = 0; k < count.clamp(1, 6); k++) {

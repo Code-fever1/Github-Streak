@@ -55,7 +55,7 @@ class _DashboardHeaderState extends State<DashboardHeader>
         Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
+            const Row(
               children: [
                 Text(
                   'My Home',
@@ -67,7 +67,7 @@ class _DashboardHeaderState extends State<DashboardHeader>
                     letterSpacing: -0.5,
                   ),
                 ),
-                const SizedBox(width: 6),
+                SizedBox(width: 6),
                 Icon(Icons.keyboard_arrow_down_rounded,
                     color: AppColors.textSecondary, size: 22),
               ],
