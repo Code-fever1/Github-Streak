@@ -1,22 +1,61 @@
+// EnergyProvider — real-data engine for the dashboard.
+//
+// Data flow mirrors the RN app's EnergyContext:
+//   1. Full dashboard fetch on startup (GET /api/solar/dashboard).
+//   2. Instant updates via SSE  (/api/solar/live/stream).
+//   3. 30s recovery poll (fetchDashboard) so a dead SSE never wedges us.
+//   4. When the backend is unreachable the provider drops into offline
+//      mode and imputes drift with the offline estimator every 60s,
+//      retrying the poll until connectivity returns.
+//
+// The public surface the pages already consume (inverter, tomzn,
+// flowHistory, energyToday, home, meters, activeMeter, logs, meter(),
+// changeover(), logReading(), deleteLog(), setLastMonthTotal(),
+// setOverlay()) is preserved; `snapshot`, `gridFlow`, `ups`, `weather`,
+// `live`, `source`, `lastSync` and `errorMessage` are the new additions.
+
 import 'dart:async';
-import 'dart:math';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 
 import '../models/energy.dart';
+import '../scene/scene.dart'
+    show HeroSceneId, HeroOverlayConfig, resolveHeroSceneId, loadOverlayConfig;
+import 'api_client.dart';
+import 'offline_estimator.dart';
+import 'overlay_overrides.dart';
 
-/// Mock live-data provider. Simulates the backend polling loop (live tick
-/// every 2s, 24h flow history). Frontend-only — swap for API calls later.
+/// Where the current dashboard data comes from.
+enum EnergyDataSource { loading, live, offline }
+
 class EnergyProvider extends ChangeNotifier {
-  static const _tick = Duration(seconds: 2);
-  static const _historyWindow = 24 * 60 * 60; // seconds
-  static const _bucket = 5 * 60; // seconds
+  final ApiClient _api;
+  final Duration pollInterval;
 
-  final Random _rng = Random(7);
-  Timer? _timer;
-  double _phase = 0;
+  static const _offlineTick = Duration(seconds: 60);
 
-  // ── Live state ────────────────────────────────────────────────────
+  Timer? _poll;
+  Timer? _offline;
+  StreamSubscription<LivePayload>? _sse;
+  bool _disposed = false;
+
+  // ── Source state ────────────────────────────────────────────────────
+  EnergyDataSource source = EnergyDataSource.loading;
+  DateTime? lastSync;
+  String? errorMessage;
+  DashboardSnapshot? _snapshot;
+
+  /// Latest authoritative snapshot (live or estimated). Used by the
+  /// offline estimator as the drift base.
+  DashboardSnapshot? get snapshot => _snapshot;
+
+  // ── Live payload fields (instant SSE updates) ───────────────────────
+  GridFlow? gridFlow;
+  UpsState? ups;
+  WeatherState? weather;
+  LiveTelemetry live = const LiveTelemetry();
+
   InverterTelemetry inverter = const InverterTelemetry(
     solarW: 1240, solarV: 121, solarA: 10.2,
     pv1V: 121, pv1A: 6.3, pv1W: 762,
@@ -33,10 +72,12 @@ class EnergyProvider extends ChangeNotifier {
   TomznLive tomzn = const TomznLive(
     energyKwh: 59460.6, voltageV: 220.4, currentA: 1.9, powerW: 420,
     frequencyHz: 50.0, isOnline: true, switchOn: true, faultCode: 0,
+    powerDisplay: '420 W',
   );
 
   List<FlowPoint> flowHistory = [];
-  EnergyToday energyToday = const EnergyToday(solarKwh: 8.32, homeKwh: 12.41, gridKwh: 4.09);
+  EnergyToday energyToday =
+      const EnergyToday(solarKwh: 8.32, homeKwh: 12.41, gridKwh: 4.09);
   HomeState home = const HomeState(
     todayUsage: 12.41, averageDaily: 12.45, projectedMonthly: 345,
     confidencePercent: 87, trend: 'decreasing',
@@ -45,7 +86,6 @@ class EnergyProvider extends ChangeNotifier {
     lastMonthTotal: 378, vsLastMonthPercent: -8.7,
     periodDay: 38, periodNight: 34, periodMorningEvening: 28,
   );
-
   List<MeterState> meters = const [
     MeterState(
       id: 'meter1', label: 'Meter 1 (Analog)', isDigital: false,
@@ -66,6 +106,93 @@ class EnergyProvider extends ChangeNotifier {
   String activeMeter = 'meter1';
   bool overlayEnabled = false;
 
+  /// Manually picked hero scene. Null = auto-resolve from weather/time.
+  HeroSceneId? selectedScene;
+
+  /// Current hero scene — manual pick, or resolved from live weather
+  /// (or time-of-day when offline/unknown).
+  HeroSceneId get scene {
+    if (selectedScene != null) return selectedScene!;
+    final w = weather;
+    if (w != null) return resolveHeroSceneId(w);
+    return switch (DateTime.now().hour) {
+      >= 5 && < 18 => HeroSceneId.morningCloud,
+      >= 18 && < 19 => HeroSceneId.evening,
+      _ => HeroSceneId.night,
+    };
+  }
+
+  void setScene(HeroSceneId? scene) {
+    selectedScene = scene;
+    notifyListeners();
+  }
+
+  // ── Overlay position overrides (dev-mode scene editor) ─────────────
+  /// Per-scene editable overlay configs. When present, HeroEnergyScene
+  /// applies these on top of the bundled JSON so positions are live-editable.
+  final Map<HeroSceneId, EditableOverlayConfig> _overlayOverrides = {};
+
+  /// Cached base configs (loaded once from bundled JSON).
+  final Map<HeroSceneId, HeroOverlayConfig> _baseOverlayCache = {};
+
+  /// Whether the overlay editor is active (shows debug handles on the scene).
+  bool overlayEditorActive = false;
+
+  Map<HeroSceneId, EditableOverlayConfig> get overlayOverrides =>
+      _overlayOverrides;
+
+  /// Returns the editable config for [scene], loading from the bundled JSON
+  /// on first access.
+  Future<EditableOverlayConfig> editableOverlay(HeroSceneId scene) async {
+    if (_overlayOverrides[scene] != null) return _overlayOverrides[scene]!;
+    final base = await _baseOverlay(scene);
+    final editable = EditableOverlayConfig.fromConfig(scene, base);
+    _overlayOverrides[scene] = editable;
+    return editable;
+  }
+
+  /// Returns the merged config (overrides applied) for [scene], or the base
+  /// config if no overrides exist yet. Uses cached base for sync access.
+  Future<HeroOverlayConfig> resolvedOverlay(HeroSceneId scene) async {
+    final base = await _baseOverlay(scene);
+    final override = _overlayOverrides[scene];
+    if (override == null) return base;
+    return override.applyTo(base);
+  }
+
+  /// Synchronous resolved config — returns null if the base hasn't been
+  /// loaded yet. Used by HeroEnergyScene to avoid FutureBuilder flicker.
+  HeroOverlayConfig? resolvedOverlaySync(HeroSceneId scene) {
+    final base = _baseOverlayCache[scene];
+    if (base == null) return null;
+    final override = _overlayOverrides[scene];
+    if (override == null) return base;
+    return override.applyTo(base);
+  }
+
+  Future<HeroOverlayConfig> _baseOverlay(HeroSceneId scene) async {
+    if (_baseOverlayCache[scene] != null) return _baseOverlayCache[scene]!;
+    final base = await loadOverlayConfig(scene);
+    _baseOverlayCache[scene] = base;
+    return base;
+  }
+
+  /// Called by the editor when a point/label/icon position changes.
+  void notifyOverlayChanged() {
+    notifyListeners();
+  }
+
+  /// Reset a scene's overrides back to the bundled JSON defaults.
+  Future<void> resetOverlay(HeroSceneId scene) async {
+    _overlayOverrides.remove(scene);
+    notifyListeners();
+  }
+
+  void setOverlayEditorActive(bool value) {
+    overlayEditorActive = value;
+    notifyListeners();
+  }
+
   List<ManualLog> logs = const [
     ManualLog(id: 'l1', timestamp: 1755739800, meterId: 'meter1', reading: 59460.6),
     ManualLog(id: 'l2', timestamp: 1755739800, meterId: 'meter2', reading: 10282.4),
@@ -73,89 +200,249 @@ class EnergyProvider extends ChangeNotifier {
     ManualLog(id: 'l4', timestamp: 1755567000, meterId: 'meter2', reading: 10276.1),
   ];
 
-  EnergyProvider() {
-    _buildHistory();
-    _timer = Timer.periodic(_tick, (_) => _step());
+  EnergyProvider({ApiClient? client, this.pollInterval = const Duration(seconds: 30)})
+      : _api = client ?? ApiClient() {
+    _bootstrap();
+  }
+
+  // ── Lifecycle ───────────────────────────────────────────────────────
+
+  void _bootstrap() {
+    _poll = Timer.periodic(pollInterval, (_) => _syncOnce());
+    _syncOnce();
   }
 
   @override
   void dispose() {
-    _timer?.cancel();
+    _disposed = true;
+    _poll?.cancel();
+    _offline?.cancel();
+    _sse?.cancel();
+    _api.dispose();
     super.dispose();
   }
 
-  // ── Live simulation ───────────────────────────────────────────────
-  double _wave(double amp, double speed, double seed) =>
-      sin(_phase * speed + seed) * amp + _rng.nextDouble() * amp * 0.25;
+  // ── Data ingestion ──────────────────────────────────────────────────
 
-  void _step() {
-    _phase += 0.35;
-    final solarTarget = 1240.0 + _wave(180.0, 0.9, 1.7);
-    final loadTarget = 1120.0 + _wave(260.0, 1.1, 4.2);
-    final solarW = max(80.0, solarTarget);
-    final loadW = max(180.0, loadTarget);
-    final solarV = 121.0 + _wave(4.0, 0.7, 2.2);
-    final solarA = solarW / solarV;
-    final importW = max(0.0, loadW - solarW);
-    final exportW = max(0.0, solarW - loadW);
+  /// Full-dashboard sync (startup, 30s poll, and recovery path).
+  Future<void> _syncOnce() async {
+    if (_disposed) return;
+    try {
+      final snap = await _api.fetchDashboard();
+      if (_disposed) return;
+      _applySnapshot(snap);
+      source = EnergyDataSource.live;
+      lastSync = DateTime.now();
+      errorMessage = null;
+      _leaveOffline();
+      _ensureSse();
+    } catch (e) {
+      if (_disposed) return;
+      _enterOffline();
+    }
+  }
 
-    inverter = inverter.copyWith(
-      solarW: solarW, solarV: solarV, solarA: solarA,
-      loadW: loadW,
-      gridW: importW > 0 ? importW : -exportW,
+  Future<void> refresh({bool force = false}) async {
+    if (_disposed) return;
+    try {
+      final snap = force
+          ? await _api.refreshAll(force: true)
+          : await _api.fetchDashboard();
+      if (_disposed) return;
+      _applySnapshot(snap);
+      source = EnergyDataSource.live;
+      lastSync = DateTime.now();
+      errorMessage = null;
+      _leaveOffline();
+      _ensureSse();
+    } catch (e) {
+      if (_disposed) return;
+      errorMessage = 'Refresh failed: $e';
+      _enterOffline();
+    }
+  }
+
+  void _ensureSse() {
+    if (_sse != null) return;
+    _sse = _api.liveStream().listen(
+      _onLive,
+      onError: (_) {}, // stream auto-reconnects internally
     );
-    tomzn = tomzn.copyWith(
-      powerW: importW,
-      currentA: importW / 220.4,
-    );
+  }
 
-    // Update the trailing history point.
-    if (flowHistory.isNotEmpty) {
-      final last = flowHistory.last;
-      flowHistory[flowHistory.length - 1] = FlowPoint(
-        timestamp: last.timestamp,
-        solarKw: solarW / 1000,
-        gridKw: tomzn.powerW / 1000,
-        loadKw: loadW / 1000,
+  /// Instant updates pushed by the backend. When we were offline this is
+  /// the first sign of life — jump back to live data.
+  void _onLive(LivePayload payload) {
+    if (_disposed) return;
+    if (source == EnergyDataSource.offline) {
+      _leaveOffline();
+      source = EnergyDataSource.live;
+      lastSync = DateTime.now();
+    }
+    if (payload.tomznLive.isLive || payload.tomznLive.isOnline) {
+      tomzn = payload.tomznLive;
+    }
+    if (payload.inverter.isLive || payload.inverter.isOnline) {
+      inverter = payload.inverter;
+    }
+    if (payload.gridFlow != null) gridFlow = payload.gridFlow;
+    if (payload.ups != null) ups = payload.ups;
+    if (payload.weather != null) weather = payload.weather;
+    final pl = payload.live;
+    if (pl != null) live = pl;
+    _snapshot = _snapshot?.copyWith(
+      tomznLive: payload.tomznLive,
+      inverter: payload.inverter.isLive || payload.inverter.isOnline
+          ? payload.inverter
+          : null,
+      gridFlow: gridFlow,
+      ups: ups,
+      weather: weather,
+      live: payload.live ?? live,
+    );
+    notifyListeners();
+  }
+
+  void _applySnapshot(DashboardSnapshot snap) {
+    _snapshot = snap;
+    activeMeter = snap.activeMeter;
+    tomzn = snap.tomznLive;
+    if (snap.inverter != null) inverter = snap.inverter!;
+    if (snap.gridFlow != null) gridFlow = snap.gridFlow;
+    if (snap.ups != null) ups = snap.ups;
+    if (snap.weather != null) weather = snap.weather;
+    if (snap.energyToday != null) energyToday = snap.energyToday!;
+    live = snap.live;
+    home = snap.home;
+    meters = snap.meters.values.toList()
+      ..sort((a, b) => a.id.compareTo(b.id));
+    flowHistory = _toFlowPoints(snap.flowHistory);
+    logs = snap.manualLogs;
+    notifyListeners();
+  }
+
+  // ── Offline mode ────────────────────────────────────────────────────
+
+  void _enterOffline() {
+    if (source == EnergyDataSource.offline) return;
+    source = EnergyDataSource.offline;
+    errorMessage = 'Backend unreachable — showing estimated values';
+    _snapshot ??= _seedSnapshot();
+    _applyLocal(_estimateNow());
+    _offline ??= Timer.periodic(_offlineTick, (_) {
+      if (_disposed || source != EnergyDataSource.offline) return;
+      _applyLocal(_estimateNow());
+    });
+  }
+
+  void _leaveOffline() {
+    _offline?.cancel();
+    _offline = null;
+  }
+
+  DashboardSnapshot _estimateNow() {
+    final base = _snapshot ?? _seedSnapshot();
+    return estimateOfflineDashboard(base);
+  }
+
+  /// Applies a snapshot without flipping the source (used by the offline
+  /// engine while staying in offline mode).
+  void _applyLocal(DashboardSnapshot snap) {
+    _snapshot = snap;
+    activeMeter = snap.activeMeter;
+    tomzn = snap.tomznLive;
+    if (snap.inverter != null) inverter = snap.inverter!;
+    if (snap.gridFlow != null) gridFlow = snap.gridFlow;
+    if (snap.ups != null) ups = snap.ups;
+    if (snap.weather != null) weather = snap.weather;
+    if (snap.energyToday != null) energyToday = snap.energyToday!;
+    live = snap.live;
+    home = snap.home;
+    meters = snap.meters.values.toList()
+      ..sort((a, b) => a.id.compareTo(b.id));
+    flowHistory = _toFlowPoints(snap.flowHistory);
+    logs = snap.manualLogs;
+    notifyListeners();
+  }
+
+  // ── Actions (optimistic locally, authoritative via API) ─────────────
+
+  /// Switches the changeover to the other meter. Applies instantly, then
+  /// tells the backend. Falls back to a local apply when unreachable.
+  Future<void> changeover([MeterId? to]) async {
+    final next = to ?? (activeMeter == 'meter1' ? 'meter2' : 'meter1');
+    final optimistic =
+        (_snapshot ?? _seedSnapshot()).copyWith(
+      changeover: ChangeoverState(activeMeter: next),
+      activeMeter: next,
+    );
+    _applyLocal(optimistic);
+    if (_disposed) return;
+    try {
+      final snap = await _api.postChangeover(next);
+      if (_disposed) return;
+      _applySnapshot(snap);
+      source = EnergyDataSource.live;
+      _leaveOffline();
+      _ensureSse();
+      errorMessage = null;
+    } catch (e) {
+      if (_disposed) return;
+      _enterOffline();
+    }
+  }
+
+  /// Stores a manual reading. Optimistic + API; fallback offline helper.
+  Future<void> logReading(MeterId meterId, double reading,
+      {String? notes, bool isBaseline = false}) async {
+    final snap = _snapshot ?? _seedSnapshot();
+    final applied = isBaseline
+        ? applyOfflineBaseline(snap, meterId, reading,
+            DateTime.now().millisecondsSinceEpoch ~/ 1000,
+            timestamp: DateTime.now().millisecondsSinceEpoch)
+        : applyOfflineManualReading(snap, meterId, reading,
+            notes: notes,
+            timestamp: DateTime.now().millisecondsSinceEpoch);
+    _applyLocal(applied);
+    if (_disposed) return;
+    try {
+      final resp = await _api.postManualReading(
+        meterId, reading,
+        notes: notes, isBaseline: isBaseline,
       );
+      if (_disposed) return;
+      _applySnapshot(resp);
+      source = EnergyDataSource.live;
+      _leaveOffline();
+      errorMessage = null;
+    } catch (e) {
+      if (_disposed) return;
+      _enterOffline();
     }
-    notifyListeners();
   }
 
-  // ── 24h history (seeded, realistic day shapes) ────────────────────
-  void _buildHistory() {
-    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-    final start = now - _historyWindow;
-    final points = <FlowPoint>[];
-    final r = Random(11);
-    for (var ts = start; ts <= now; ts += _bucket) {
-      final h = DateTime.fromMillisecondsSinceEpoch(ts * 1000).hour +
-          DateTime.fromMillisecondsSinceEpoch(ts * 1000).minute / 60;
-      // Solar: bell curve peaking ~13:00, zero at night.
-      final solar = h >= 6 && h <= 19
-          ? 1.35 * exp(-pow((h - 13) / 3.6, 2)) * (0.85 + r.nextDouble() * 0.3)
-          : 0.0;
-      // Home load: morning + evening peaks.
-      final load = 0.55 +
-          (h >= 6 && h <= 10 ? 0.75 * exp(-pow((h - 8) / 1.8, 2)) : 0) +
-          (h >= 17 && h <= 23 ? 1.1 * exp(-pow((h - 20) / 2.2, 2)) : 0) +
-          (h >= 0 && h <= 5 ? 0.25 : 0) +
-          r.nextDouble() * 0.2;
-      final grid = max(0.0, load - solar) + (h >= 20 || h <= 4 ? 0.18 : 0.05);
-      points.add(FlowPoint(
-        timestamp: ts,
-        solarKw: solar,
-        gridKw: grid,
-        loadKw: load,
-      ));
+  Future<void> deleteLog(String id) async {
+    logs = logs.where((l) => l.id != id).toList();
+    _snapshot = _snapshot?.copyWith(manualLogs: logs);
+    notifyListeners();
+    if (_disposed) return;
+    try {
+      await _api.deleteManualReading(id);
+    } catch (_) {
+      // best-effort: keep the local list as-is
     }
-    flowHistory = points;
   }
 
-  // ── Actions (mock) ────────────────────────────────────────────────
-  void changeover() {
-    activeMeter = activeMeter == 'meter1' ? 'meter2' : 'meter1';
-    notifyListeners();
+  Future<void> setLastMonthTotal(double value) async {
+    final snap = _snapshot ?? _seedSnapshot();
+    _applyLocal(applyOfflineLastMonthTotal(snap, value));
+    if (_disposed) return;
+    try {
+      await _api.postLastMonthTotal(value);
+      errorMessage = null;
+    } catch (_) {
+      _enterOffline();
+    }
   }
 
   void setOverlay(bool value) {
@@ -163,53 +450,80 @@ class EnergyProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  MeterState meter(String id) => meters.firstWhere((m) => m.id == id);
+  MeterState meter(MeterId id) =>
+      meters.firstWhere((m) => m.id == id, orElse: () => meters.first);
 
-  void logReading(String meterId, double reading) {
-    final ts = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-    logs = [
-      ManualLog(
-        id: 'l${DateTime.now().microsecondsSinceEpoch}',
-        timestamp: ts, meterId: meterId, reading: reading,
-      ),
-      ...logs,
-    ];
-    meters = [
-      for (final m in meters)
-        if (m.id == meterId)
-          MeterState(
-            id: m.id, label: m.label, isDigital: m.isDigital,
-            reading: reading, remainingUnits: m.remainingUnits,
-            targetUnits: m.targetUnits, todayUsage: m.todayUsage,
-            projectedDaysLeft: m.projectedDaysLeft,
-            projectedMonthly: m.projectedMonthly, healthScore: m.healthScore,
-            averageDaily: m.averageDaily,
-            lastLoggedReading: reading, lastLoggedAt: ts,
-          )
-        else
-          m,
-    ];
-    notifyListeners();
-  }
+  // ── Helpers ─────────────────────────────────────────────────────────
 
-  void deleteLog(String id) {
-    logs = logs.where((l) => l.id != id).toList();
-    notifyListeners();
-  }
+  static List<FlowPoint> _toFlowPoints(List<EnergyFlowPoint> pts) => pts
+      .map((p) => FlowPoint(
+            timestamp: p.timestamp ~/ 1000,
+            solarKw: p.solarKw,
+            gridKw: p.gridKw,
+            loadKw: p.loadKw,
+          ))
+      .toList();
 
-  void setLastMonthTotal(double value) {
-    final old = home.lastMonthTotal ?? value;
-    final pct = old > 0 ? ((home.projectedMonthly - value) / value) * 100 : 0.0;
-    home = HomeState(
-      todayUsage: home.todayUsage, averageDaily: home.averageDaily,
-      projectedMonthly: home.projectedMonthly, confidencePercent: home.confidencePercent,
-      trend: home.trend, yesterdayUsage: home.yesterdayUsage,
-      usageChangePercent: home.usageChangePercent, loadStatus: home.loadStatus,
-      normalDrawKw: home.normalDrawKw, combinedDaysLeft: home.combinedDaysLeft,
-      lastMonthTotal: value, vsLastMonthPercent: pct,
-      periodDay: home.periodDay, periodNight: home.periodNight,
-      periodMorningEvening: home.periodMorningEvening,
+  /// Builds a DashboardSnapshot from the seed mock values — the drift base
+  /// used when the app starts with no backend and for the offline engine.
+  DashboardSnapshot _seedSnapshot() {
+    final now = DateTime.now();
+    return DashboardSnapshot(
+      generatedAt: now.toIso8601String(),
+      activeMeter: activeMeter,
+      changeover: ChangeoverState(activeMeter: activeMeter),
+      tomznLive: tomzn,
+      inverter: inverter,
+      weather: weather,
+      energyToday: energyToday,
+      flowHistory: [
+        for (var h = 23; h >= 0; h--)
+          EnergyFlowPoint(
+            timestamp: (now.millisecondsSinceEpoch ~/ 1000 - h * 3600) * 1000,
+            solarKw: _seedSolarAt(now, h),
+            gridKw: _seedGridAt(now, h),
+            loadKw: _seedLoadAt(now, h),
+          ),
+        EnergyFlowPoint(
+          timestamp: now.millisecondsSinceEpoch,
+          solarKw: inverter.solarW / 1000,
+          gridKw: tomzn.powerW / 1000,
+          loadKw: inverter.loadW / 1000,
+        ),
+      ],
+      live: live,
+      gridFlow: gridFlow,
+      home: home,
+      meters: {
+        for (final m in meters) m.id: m,
+      },
+      manualLogs: logs,
+      ups: ups,
     );
-    notifyListeners();
+  }
+
+  // Deterministic seed-day shapes (bell-curve solar, twin-peak load).
+  static double _seedSolarAt(DateTime now, int hoursAgo) {
+    final t = now.subtract(Duration(hours: hoursAgo));
+    final h = t.hour + t.minute / 60.0;
+    if (h < 6 || h > 19) return 0;
+    return 1.35 * math.exp(-math.pow((h - 13) / 3.6, 2));
+  }
+
+  static double _seedLoadAt(DateTime now, int hoursAgo) {
+    final t = now.subtract(Duration(hours: hoursAgo));
+    final h = t.hour + t.minute / 60.0;
+    return 0.55 +
+        (h >= 6 && h <= 10 ? 0.75 * math.exp(-math.pow((h - 8) / 1.8, 2)) : 0) +
+        (h >= 17 && h <= 23 ? 1.1 * math.exp(-math.pow((h - 20) / 2.2, 2)) : 0) +
+        (h >= 0 && h <= 5 ? 0.25 : 0);
+  }
+
+  static double _seedGridAt(DateTime now, int hoursAgo) {
+    final t = now.subtract(Duration(hours: hoursAgo));
+    final h = t.hour + t.minute / 60.0;
+    final solar = _seedSolarAt(now, hoursAgo);
+    final load = _seedLoadAt(now, hoursAgo);
+    return math.max(0.0, load - solar) + (h >= 20 || h <= 4 ? 0.18 : 0.05);
   }
 }

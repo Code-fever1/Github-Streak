@@ -17,12 +17,12 @@ class AppColors {
   // ── Accents ──────────────────────────────────────────────────────
   static const success = Color(0xFF22C55E);  // green / load / charging
   static const home = success;               // alias for load/home
-  static const solar = Color(0xFF3B82F6);    // blue / solar panel
-  static const grid = Color(0xFF60A5FA);     // light blue / grid
+  static const solar = Color(0xFF22C55E);    // green / solar panel (matches reference)
+  static const grid = Color(0xFF38BDF8);     // sky blue / grid / WAPDA
   static const export = Color(0xFF22C55E);   // exporting
   static const warning = Color(0xFFF59E0B);  // amber
   static const danger = Color(0xFFEF4444);   // red
-  static const info = Color(0xFF60A5FA);     // info / grid
+  static const info = Color(0xFF38BDF8);     // info / grid
   static const purple = Color(0xFF8B6CF0);   // forecast / ai
 
   // Time-of-day aliases
@@ -33,8 +33,8 @@ class AppColors {
   // ── Soft fills for icon chips ────────────────────────────────────
   static Color successSoft = const Color(0xFF22C55E).withValues(alpha: 0.10);
   static Color homeSoft = successSoft;
-  static Color solarSoft = const Color(0xFF3B82F6).withValues(alpha: 0.10);
-  static Color gridSoft = const Color(0xFF60A5FA).withValues(alpha: 0.10);
+  static Color solarSoft = const Color(0xFF22C55E).withValues(alpha: 0.10);
+  static Color gridSoft = const Color(0xFF38BDF8).withValues(alpha: 0.10);
   static Color warningSoft = const Color(0xFFF59E0B).withValues(alpha: 0.10);
   static Color dangerSoft = const Color(0xFFEF4444).withValues(alpha: 0.10);
   static Color purpleSoft = const Color(0xFF8B6CF0).withValues(alpha: 0.10);

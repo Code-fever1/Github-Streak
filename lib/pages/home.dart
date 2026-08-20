@@ -1,268 +1,379 @@
-import 'dart:math';
-
 import 'package:flutter/material.dart';
 
 import '../data/energy_scope.dart';
+import '../data/idle_context.dart';
+import '../scene/scene.dart';
 import '../theme/app_colors.dart';
-import '../widgets/glass_card.dart';
-import '../widgets/isometric_house.dart';
-import '../widgets/solar_panel.dart';
+import '../widgets/dashboard/daily_energy_card.dart';
+import '../widgets/dashboard/dashboard_header.dart';
+import '../widgets/dashboard/power_metric_card.dart';
+import '../widgets/dashboard/power_summary_row.dart';
+import '../widgets/hero_energy_scene.dart';
 
 class HomePage extends StatelessWidget {
   const HomePage({super.key});
+
+  // ── Helpers ──────────────────────────────────────────────────────
+  static String _fmtPower(double w) {
+    final abs = w.abs();
+    if (abs >= 1000) return '${(abs / 1000).toStringAsFixed(2)} kW';
+    return '${abs.round()} W';
+  }
+
+  static String _modeLabel(bool offline, double solarW, double gridW,
+      bool exporting, bool importing) {
+    if (offline) return 'System Offline';
+    if (solarW > 20 && (importing || exporting)) return 'Hybrid';
+    if (solarW > 20) return 'Solar Only';
+    if (importing) return 'Wapda Importing';
+    if (exporting) return 'Exporting';
+    return 'Standby';
+  }
+
+  static Color _modeColor(String mode) => switch (mode) {
+        'Hybrid' => AppColors.success,
+        'Solar Only' => AppColors.solar,
+        'Wapda Importing' => AppColors.info,
+        'Exporting' => AppColors.info,
+        'System Offline' => AppColors.danger,
+        _ => AppColors.warning,
+      };
 
   @override
   Widget build(BuildContext context) {
     final p = EnergyScope.of(context);
     final inv = p.inverter;
     final tomzn = p.tomzn;
-    final offline = !inv.isOnline || !tomzn.isOnline;
 
-    final solarW = offline ? 0.0 : inv.solarW;
-    final gridW = offline ? 0.0 : (tomzn.powerW);
-    final homeW = offline ? 0.0 : inv.loadW;
-    final total = p.energyToday.solarKwh + p.home.todayUsage;
-    final solarShare = total > 0 ? (p.energyToday.solarKwh / total * 100).round() : 0;
+    final isOnline = inv.isOnline && tomzn.isOnline;
+    final solarW = isOnline ? inv.solarW : 0.0;
+    final homeW = isOnline ? inv.loadW : 0.0;
+    final exporting = !isOnline
+        ? false
+        : (tomzn.isOnline && tomzn.powerW <= 1 && inv.gridW < -10);
+    final gridW = isOnline ? (exporting ? -inv.gridW : tomzn.powerW) : 0.0;
+    final importing = gridW > 10;
 
-    final status = solarW > 20 ? 'Charging' : offline ? 'Offline' : 'Standby';
-    final statusColor = solarW > 20 ? AppColors.success : offline ? AppColors.danger : AppColors.warning;
+    final solarKw = solarW / 1000;
+    final homeKw = homeW / 1000;
+    final gridKw = gridW / 1000;
 
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(20, 12, 20, 28),
-      children: [
-        // ── Header ──────────────────────────────────────────────────
-        Row(
-          children: [
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+    // Mini chart: last 12 flow history buckets → solar kW values
+    final history = p.flowHistory;
+    final chartBuckets =
+        history.length > 12 ? history.sublist(history.length - 12) : history;
+    final chartValues = chartBuckets.map((pt) => (pt.solarKw ?? 0.0)).toList();
+
+    final mode = _modeLabel(!isOnline, solarW, gridW, exporting, importing);
+
+    return IdleContext(
+      rotateScenes: p.overlayEnabled,
+      child: Builder(
+        builder: (context) {
+          final stage = idleStageOf(context);
+          final scene = stage == IdleStage.asleep && p.overlayEnabled
+              ? idleRotationSceneOf(context)
+              : p.scene;
+
+          final sheetGrad = kSceneSheetColors[scene]!;
+          final seam = Color.fromARGB(255, sheetGrad.seam.$1.toInt(),
+              sheetGrad.seam.$2.toInt(), sheetGrad.seam.$3.toInt());
+          final mid = Color.fromARGB(255, sheetGrad.mid.$1.toInt(),
+              sheetGrad.mid.$2.toInt(), sheetGrad.mid.$3.toInt());
+          final sky = Color.fromARGB(255, sheetGrad.sky.$1.toInt(),
+              sheetGrad.sky.$2.toInt(), sheetGrad.sky.$3.toInt());
+
+          return Scaffold(
+            backgroundColor: Colors.transparent,
+            body: Stack(
               children: [
-                Text('My Home', style: AppType.inter(22, color: AppColors.textPrimary, weight: FontWeight.w700)),
-                const SizedBox(height: 4),
-                Row(
-                  children: [
-                    Container(width: 6, height: 6, decoration: BoxDecoration(color: statusColor, shape: BoxShape.circle,
-                        boxShadow: [BoxShadow(color: statusColor.withValues(alpha: 0.6), blurRadius: 6)])),
-                    const SizedBox(width: 6),
-                    Text(status, style: AppType.inter(12, color: statusColor, weight: FontWeight.w600)),
-                  ],
+                // ── 1. Full-screen wallpaper ──────────────────────────
+                Positioned.fill(
+                  child: Image.asset(
+                    wallpaperAssetFor(scene),
+                    fit: BoxFit.cover,
+                  ),
+                ),
+                // Dark gradient overlay (matches RN: 0.25 → 0.1 → 0.4)
+                Positioned.fill(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        stops: const [0.0, 0.35, 1.0],
+                        colors: [
+                          Colors.black.withValues(alpha: 0.25),
+                          Colors.black.withValues(alpha: 0.10),
+                          Colors.black.withValues(alpha: 0.40),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                // ── 2. Hero overlay at top ~50% ───────────────────────
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  top: 0,
+                  height: MediaQuery.of(context).size.height * 0.50,
+                  child: Stack(
+                    children: [
+                      HeroEnergyScene(
+                        scene: scene,
+                        solarW: solarW,
+                        homeW: homeW,
+                        gridW: gridW,
+                        gridReverse: exporting,
+                        showBypass: false,
+                        modeLabel: mode,
+                        modeColor: _modeColor(mode),
+                        systemOffline: !isOnline,
+                        idle: stage == IdleStage.asleep,
+                        source: p.source,
+                      ),
+                      // ── Idle overlay: dim + "tap to wake" ────────────
+                      if (stage != IdleStage.awake)
+                        AnimatedOpacity(
+                          opacity: stage == IdleStage.asleep ? 1 : 0,
+                          duration: stage == IdleStage.asleep
+                              ? const Duration(milliseconds: 500)
+                              : const Duration(milliseconds: 200),
+                          child: IgnorePointer(
+                            child: Container(
+                              color: Colors.black.withValues(alpha: 0.45),
+                              child: Center(
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Container(
+                                      width: 46,
+                                      height: 46,
+                                      decoration: BoxDecoration(
+                                        color: Colors.white
+                                            .withValues(alpha: 0.12),
+                                        shape: BoxShape.circle,
+                                        border: Border.all(
+                                            color: Colors.white
+                                                .withValues(alpha: 0.35)),
+                                      ),
+                                      child: const Icon(Icons.wb_sunny_rounded,
+                                          color: Colors.white70, size: 22),
+                                    ),
+                                    const SizedBox(height: 10),
+                                    Text('Tap to wake',
+                                        style: AppType.inter(13,
+                                            color: Colors.white,
+                                            weight: FontWeight.w600,
+                                            letterSpacing: 0.3)),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                // ── 3. Scrollable sheet with rounded top corners ──────
+                Positioned.fill(
+                  child: NotificationListener<ScrollNotification>(
+                    onNotification: (_) {
+                      // Wake idle on scroll
+                      return false;
+                    },
+                    child: SingleChildScrollView(
+                      padding: EdgeInsets.only(
+                        top: MediaQuery.of(context).size.height * 0.49,
+                      ),
+                      child: ClipRRect(
+                        borderRadius: const BorderRadius.only(
+                          topLeft: Radius.circular(28),
+                          topRight: Radius.circular(28),
+                        ),
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.topCenter,
+                              end: Alignment.bottomCenter,
+                              stops: const [0.0, 0.12, 0.32, 1.0],
+                              colors: [
+                                seam.withValues(alpha: 0.55),
+                                seam.withValues(alpha: 0.88),
+                                mid,
+                                sky,
+                              ],
+                            ),
+                          ),
+                          child: SafeArea(
+                            top: false,
+                            bottom: false,
+                            child: Padding(
+                              padding:
+                                  const EdgeInsets.fromLTRB(16, 14, 16, 120),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  // ── Header ──────────────────────────────
+                                  DashboardHeader(
+                                    isOnline: isOnline,
+                                    source: p.source,
+                                    lastSync: p.lastSync,
+                                  ),
+                                  const SizedBox(height: 16),
+
+                                  // ── Scene chips ─────────────────────────
+                                  _SceneChips(
+                                    selectedScene: p.selectedScene,
+                                    onSceneTap: p.setScene,
+                                  ),
+                                  const SizedBox(height: 16),
+
+                                  // ── Two metric cards ────────────────────
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: PowerMetricCard(
+                                          icon: Icons.home_rounded,
+                                          iconColor: AppColors.success,
+                                          title: 'Home Usage',
+                                          value: _fmtPower(homeW),
+                                          description: 'Current consumption',
+                                          scene: scene,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 12),
+                                      Expanded(
+                                        child: PowerMetricCard(
+                                          icon:
+                                              Icons.electrical_services_rounded,
+                                          iconColor: AppColors.grid,
+                                          title: 'Grid Status',
+                                          value: _fmtPower(gridW),
+                                          description: importing
+                                              ? 'Importing'
+                                              : 'No import',
+                                          scene: scene,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 12),
+
+                                  // ── Power summary 3-column row ──────────
+                                  PowerSummaryRow(
+                                    solarKw: solarKw,
+                                    homeKw: homeKw,
+                                    gridKw: gridKw,
+                                    scene: scene,
+                                  ),
+                                  const SizedBox(height: 12),
+
+                                  // ── Today's clean energy card ───────────
+                                  DailyEnergyCard(
+                                    solarKwh: p.energyToday.solarKwh,
+                                    chartValues: chartValues,
+                                    scene: scene,
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
                 ),
               ],
             ),
-            const Spacer(),
-            Container(
-              width: 38, height: 38,
-              decoration: BoxDecoration(color: AppColors.surfaceAlt, shape: BoxShape.circle,
-                border: Border.all(color: AppColors.border)),
-              child: const Icon(Icons.person_rounded, color: AppColors.textSecondary, size: 18),
-            ),
-          ],
-        ),
-        const SizedBox(height: 20),
-
-        // ── Solar Panel card ────────────────────────────────────────
-        Container(
-          padding: const EdgeInsets.all(18),
-          decoration: BoxDecoration(
-            color: AppColors.surface,
-            borderRadius: BorderRadius.circular(24),
-            border: Border.all(color: AppColors.border),
-          ),
-          child: Row(
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('Solar Panel', style: AppType.inter(16, color: AppColors.textPrimary, weight: FontWeight.w700)),
-                    const SizedBox(height: 4),
-                    Text('High energy generating', style: AppType.inter(12, color: AppColors.textSecondary)),
-                    const SizedBox(height: 14),
-                    Row(
-                      children: [
-                        Icon(Icons.battery_full_rounded, size: 16, color: AppColors.success),
-                        const SizedBox(width: 6),
-                        Text('$solarShare% Solar', style: AppType.inter(13, color: AppColors.textPrimary, weight: FontWeight.w700)),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-              const SolarPanelIllustration(size: 90),
-            ],
-          ),
-        ),
-        const SizedBox(height: 14),
-
-        // ── Two metric cards ────────────────────────────────────────
-        Row(
-          children: [
-            Expanded(
-              child: _MetricCard(
-                icon: Icons.bolt_rounded,
-                iconColor: AppColors.success,
-                label: 'Current Power',
-                sublabel: 'Generation',
-                value: _fmtPower(solarW),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: _MetricCard(
-                icon: Icons.cell_tower_rounded,
-                iconColor: AppColors.grid,
-                label: 'Current Grid',
-                sublabel: 'Power supply',
-                value: _fmtPower(gridW),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 14),
-
-        // ── Isometric home hero ─────────────────────────────────────
-        Container(
-          height: 240,
-          decoration: BoxDecoration(
-            color: AppColors.surface,
-            borderRadius: BorderRadius.circular(24),
-            border: Border.all(color: AppColors.border),
-          ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(24),
-            child: IsometricHouse(solarW: solarW, gridW: gridW, homeW: homeW),
-          ),
-        ),
-        const SizedBox(height: 14),
-
-        // ── Bottom three metric chips ───────────────────────────────
-        Row(
-          children: [
-            Expanded(child: _BottomChip(
-              icon: Icons.water_drop_outlined,
-              color: AppColors.success,
-              label: 'Load',
-              value: _fmtPower(homeW),
-            )),
-            const SizedBox(width: 10),
-            Expanded(child: _BottomChip(
-              icon: Icons.cell_tower_rounded,
-              color: AppColors.grid,
-              label: 'Grid',
-              value: _fmtPower(gridW),
-            )),
-            const SizedBox(width: 10),
-            Expanded(child: _BottomChip(
-              icon: Icons.wb_sunny_rounded,
-              color: AppColors.solar,
-              label: 'Solar',
-              value: _fmtPower(solarW),
-            )),
-          ],
-        ),
-        const SizedBox(height: 18),
-
-        // ── Live status rail (clean) ────────────────────────────────
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceAround,
-          children: [
-            _StatusDot('Solar', solarW > 20 ? AppColors.success : AppColors.warning),
-            _StatusDot('Inverter', inv.inverterFault == 'NO' ? AppColors.success : AppColors.danger),
-            _StatusDot('Grid', tomzn.isOnline ? AppColors.info : AppColors.danger),
-            _StatusDot(p.activeMeter == 'meter1' ? 'Meter 1' : 'Meter 2', AppColors.textSecondary),
-          ],
-        ),
-      ],
+          );
+        },
+      ),
     );
-  }
-
-  String _fmtPower(double w) {
-    final abs = w.abs();
-    if (abs >= 1000) return '${(abs / 1000).toStringAsFixed(2)} kW';
-    return '${abs.round()} W';
   }
 }
 
-class _MetricCard extends StatelessWidget {
-  final IconData icon;
-  final Color iconColor;
-  final String label, sublabel, value;
+/// Horizontal scene-picker chips (Auto + 6 scenes).
+class _SceneChips extends StatelessWidget {
+  final HeroSceneId? selectedScene;
+  final void Function(HeroSceneId?) onSceneTap;
 
-  const _MetricCard({
-    required this.icon, required this.iconColor,
-    required this.label, required this.sublabel, required this.value,
-  });
+  const _SceneChips({required this.selectedScene, required this.onSceneTap});
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: AppColors.border),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            width: 32, height: 32,
-            decoration: BoxDecoration(color: iconColor.withValues(alpha: 0.10), borderRadius: BorderRadius.circular(10)),
-            child: Icon(icon, size: 16, color: iconColor),
-          ),
-          const SizedBox(height: 12),
-          Text(label, style: AppType.inter(12, color: AppColors.textSecondary)),
-          Text(sublabel, style: AppType.inter(11, color: AppColors.textMuted)),
-          const SizedBox(height: 8),
-          Text(value, style: AppType.inter(18, color: AppColors.textPrimary, weight: FontWeight.w700)),
-        ],
-      ),
-    );
-  }
-}
-
-class _BottomChip extends StatelessWidget {
-  final IconData icon;
-  final Color color;
-  final String label, value;
-
-  const _BottomChip({required this.icon, required this.color, required this.label, required this.value});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: AppColors.border),
-      ),
-      child: Column(
-        children: [
-          Icon(icon, size: 18, color: color),
-          const SizedBox(height: 8),
-          Text(label, style: AppType.inter(10, color: AppColors.textSecondary, weight: FontWeight.w600)),
-          const SizedBox(height: 2),
-          Text(value, style: AppType.inter(13, color: AppColors.textPrimary, weight: FontWeight.w700)),
-        ],
+    return SizedBox(
+      height: 40,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        itemCount: HeroSceneId.values.length + 1,
+        separatorBuilder: (_, __) => const SizedBox(width: 8),
+        itemBuilder: (context, i) {
+          if (i == 0) {
+            final auto = selectedScene == null;
+            return _SceneChip(
+              label: 'Auto',
+              active: auto,
+              onTap: () => onSceneTap(null),
+            );
+          }
+          final scene = HeroSceneId.values[i - 1];
+          return _SceneChip(
+            label: _sceneLabel(scene),
+            active: selectedScene == scene,
+            onTap: () => onSceneTap(scene),
+          );
+        },
       ),
     );
   }
+
+  static String _sceneLabel(HeroSceneId s) => switch (s) {
+        HeroSceneId.night => 'Night',
+        HeroSceneId.rainLight => 'Rain',
+        HeroSceneId.cloudsDark => 'Clouds',
+        HeroSceneId.fog => 'Fog',
+        HeroSceneId.evening => 'Evening',
+        HeroSceneId.morningCloud => 'Morning',
+      };
 }
 
-class _StatusDot extends StatelessWidget {
+class _SceneChip extends StatelessWidget {
   final String label;
-  final Color color;
-  const _StatusDot(this.label, this.color);
+  final bool active;
+  final VoidCallback onTap;
+
+  const _SceneChip(
+      {required this.label, required this.active, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        Container(width: 8, height: 8, decoration: BoxDecoration(color: color, shape: BoxShape.circle,
-            boxShadow: [BoxShadow(color: color.withValues(alpha: 0.5), blurRadius: 5)])),
-        const SizedBox(height: 6),
-        Text(label, style: AppType.inter(10, color: AppColors.textSecondary, weight: FontWeight.w600)),
-      ],
+    final color = active ? AppColors.success : AppColors.textSecondary;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(20),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(horizontal: 14),
+        decoration: BoxDecoration(
+          color: (active ? AppColors.success : AppColors.surfaceAlt)
+              .withValues(alpha: active ? 0.16 : 0.6),
+          borderRadius: BorderRadius.circular(20),
+          border:
+              Border.all(color: color.withValues(alpha: active ? 0.7 : 0.25)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.circle,
+                size: 7, color: color.withValues(alpha: active ? 1 : 0.45)),
+            const SizedBox(width: 6),
+            Text(label,
+                style:
+                    AppType.inter(10.5, color: color, weight: FontWeight.w600)),
+          ],
+        ),
+      ),
     );
   }
 }

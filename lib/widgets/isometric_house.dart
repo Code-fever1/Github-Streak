@@ -83,7 +83,7 @@ class _HousePainter extends CustomPainter {
     _drawTree(canvas, Offset(center - w * 0.30, groundY - 8));
 
     // Energy flows
-    if (solarW > 10) _drawFlow(canvas, _lineSolarToRoof(center, groundY), AppColors.solar, solarW, true);
+    if (solarW > 10) _drawFlow(canvas, _lineSolarToRoof(center, groundY), AppColors.success, solarW, true);
     if (gridW.abs() > 10) _drawFlow(canvas, _lineToGrid(center, groundY), AppColors.grid, gridW.abs(), gridW < 0);
     if (homeW > 10) _drawFlow(canvas, _lineToHome(center, groundY), AppColors.success, homeW, true);
 

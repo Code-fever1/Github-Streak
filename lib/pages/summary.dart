@@ -8,6 +8,7 @@ import '../models/energy.dart';
 import '../theme/app_colors.dart';
 import '../widgets/gauges.dart';
 import '../widgets/glass_card.dart';
+import '../widgets/scene_background.dart';
 
 class SummaryPage extends StatefulWidget {
   const SummaryPage({super.key});
@@ -23,76 +24,103 @@ class _SummaryPageState extends State<SummaryPage> {
   @override
   Widget build(BuildContext context) {
     final p = EnergyScope.of(context);
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(16, 18, 16, 32),
+    return Stack(
       children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        SceneBackground(scene: p.scene),
+        ListView(
+          padding: const EdgeInsets.fromLTRB(16, 18, 16, 120),
           children: [
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text('VOLTIX', style: AppType.mono(9.5, color: AppColors.textSecondary, letterSpacing: 1.6)),
-                const SizedBox(height: 5),
-                Text('Summary', style: const TextStyle(fontFamily: 'Outfit', fontSize: 24, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: -0.6)),
-                const SizedBox(height: 3),
-                Text('Complete device telemetry & usage analytics', style: AppType.inter(10.5, color: AppColors.textSecondary)),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('VOLTIX',
+                        style: AppType.mono(9.5,
+                            color: AppColors.textSecondary,
+                            letterSpacing: 1.6)),
+                    const SizedBox(height: 5),
+                    Text('Summary',
+                        style: const TextStyle(
+                            fontFamily: 'Outfit',
+                            fontSize: 24,
+                            fontWeight: FontWeight.w700,
+                            color: AppColors.textPrimary,
+                            letterSpacing: -0.6)),
+                    const SizedBox(height: 3),
+                    Text('Complete device telemetry & usage analytics',
+                        style: AppType.inter(10.5,
+                            color: AppColors.textSecondary)),
+                  ],
+                ),
               ],
             ),
+            const SizedBox(height: 18),
+
+            // Segmented tab bar
+            Container(
+              padding: const EdgeInsets.all(4),
+              decoration: BoxDecoration(
+                color: AppColors.surface,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: AppColors.border),
+              ),
+              child: Row(
+                children: List.generate(_tabs.length, (i) {
+                  final selected = _tab == i;
+                  return Expanded(
+                    child: GestureDetector(
+                      onTap: () => setState(() => _tab = i),
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 220),
+                        curve: Curves.easeOut,
+                        padding: const EdgeInsets.symmetric(vertical: 9),
+                        decoration: BoxDecoration(
+                          color: selected
+                              ? AppColors.surfaceAlt
+                              : Colors.transparent,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(
+                              i == 0
+                                  ? Icons.show_chart_rounded
+                                  : i == 1
+                                      ? Icons.wb_sunny_rounded
+                                      : Icons.memory_rounded,
+                              size: 13,
+                              color: selected
+                                  ? AppColors.textPrimary
+                                  : AppColors.textMuted,
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              _tabs[i],
+                              style: AppType.inter(10.5,
+                                  color: selected
+                                      ? AppColors.textPrimary
+                                      : AppColors.textMuted,
+                                  weight: FontWeight.w700),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  );
+                }),
+              ),
+            ),
+            const SizedBox(height: 12),
+
+            if (_tab == 0)
+              _UsageTab(home: p.home, confidence: p.home.confidencePercent),
+            if (_tab == 1) _InverterTab(inv: p.inverter),
+            if (_tab == 2) _MeterTab(p: p),
           ],
         ),
-        const SizedBox(height: 18),
-
-        // Segmented tab bar
-        Container(
-          padding: const EdgeInsets.all(4),
-          decoration: BoxDecoration(
-            color: AppColors.surface,
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: AppColors.border),
-          ),
-          child: Row(
-            children: List.generate(_tabs.length, (i) {
-              final selected = _tab == i;
-              return Expanded(
-                child: GestureDetector(
-                  onTap: () => setState(() => _tab = i),
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 220),
-                    curve: Curves.easeOut,
-                    padding: const EdgeInsets.symmetric(vertical: 9),
-                    decoration: BoxDecoration(
-                      color: selected ? AppColors.surfaceAlt : Colors.transparent,
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(
-                          i == 0 ? Icons.show_chart_rounded : i == 1 ? Icons.wb_sunny_rounded : Icons.memory_rounded,
-                          size: 13,
-                          color: selected ? AppColors.textPrimary : AppColors.textMuted,
-                        ),
-                        const SizedBox(width: 6),
-                        Text(
-                          _tabs[i],
-                          style: AppType.inter(10.5,
-                              color: selected ? AppColors.textPrimary : AppColors.textMuted,
-                              weight: FontWeight.w700),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              );
-            }),
-          ),
-        ),
-        const SizedBox(height: 12),
-
-        if (_tab == 0) _UsageTab(home: p.home, confidence: p.home.confidencePercent),
-        if (_tab == 1) _InverterTab(inv: p.inverter),
-        if (_tab == 2) _MeterTab(p: p),
       ],
     );
   }
@@ -119,25 +147,35 @@ class _UsageTab extends StatelessWidget {
     return Column(
       children: [
         GlassCard(
+          scene: EnergyScope.of(context).scene,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Row(
                 children: [
-                  Icon(Icons.show_chart_rounded, size: 13, color: AppColors.purple),
+                  Icon(Icons.show_chart_rounded,
+                      size: 13, color: AppColors.purple),
                   const SizedBox(width: 6),
-                  Text('USAGE SUMMARY', style: AppType.mono(9, color: AppColors.textSecondary, letterSpacing: 1.1)),
+                  Text('USAGE SUMMARY',
+                      style: AppType.mono(9,
+                          color: AppColors.textSecondary, letterSpacing: 1.1)),
                   const Spacer(),
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    decoration: BoxDecoration(color: AppColors.purpleSoft, borderRadius: BorderRadius.circular(20)),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                        color: AppColors.purpleSoft,
+                        borderRadius: BorderRadius.circular(20)),
                     child: Text('${confidence.round()}% confidence',
-                        style: AppType.inter(8.5, color: AppColors.purple, weight: FontWeight.w700)),
+                        style: AppType.inter(8.5,
+                            color: AppColors.purple, weight: FontWeight.w700)),
                   ),
                 ],
               ),
               const SizedBox(height: 16),
-              Text('AVG DAILY USAGE', style: AppType.mono(7.5, color: AppColors.textMuted, letterSpacing: 1)),
+              Text('AVG DAILY USAGE',
+                  style: AppType.mono(7.5,
+                      color: AppColors.textMuted, letterSpacing: 1)),
               const SizedBox(height: 4),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.end,
@@ -145,25 +183,49 @@ class _UsageTab extends StatelessWidget {
                   Text.rich(
                     TextSpan(
                       text: home.averageDaily.toStringAsFixed(2),
-                      style: const TextStyle(fontFamily: 'Outfit', fontSize: 28, fontWeight: FontWeight.w700, color: AppColors.textPrimary, letterSpacing: -0.8),
-                      children: [TextSpan(text: '  units / day', style: AppType.inter(10, color: AppColors.textSecondary, weight: FontWeight.w600))],
+                      style: const TextStyle(
+                          fontFamily: 'Outfit',
+                          fontSize: 28,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.textPrimary,
+                          letterSpacing: -0.8),
+                      children: [
+                        TextSpan(
+                            text: '  units / day',
+                            style: AppType.inter(10,
+                                color: AppColors.textSecondary,
+                                weight: FontWeight.w600))
+                      ],
                     ),
                   ),
                   const Spacer(),
                   if (trendPct != null)
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 4),
                       decoration: BoxDecoration(
-                        color: (trendPct <= 0 ? AppColors.home : AppColors.danger).withValues(alpha: 0.12),
+                        color:
+                            (trendPct <= 0 ? AppColors.home : AppColors.danger)
+                                .withValues(alpha: 0.12),
                         borderRadius: BorderRadius.circular(20),
                       ),
                       child: Row(
                         children: [
-                          Icon(trendPct <= 0 ? Icons.arrow_downward_rounded : Icons.arrow_upward_rounded,
-                              size: 11, color: trendPct <= 0 ? AppColors.home : AppColors.danger),
+                          Icon(
+                              trendPct <= 0
+                                  ? Icons.arrow_downward_rounded
+                                  : Icons.arrow_upward_rounded,
+                              size: 11,
+                              color: trendPct <= 0
+                                  ? AppColors.home
+                                  : AppColors.danger),
                           const SizedBox(width: 3),
                           Text('${trendPct.abs().toStringAsFixed(1)}%',
-                              style: AppType.inter(9, color: trendPct <= 0 ? AppColors.home : AppColors.danger, weight: FontWeight.w700)),
+                              style: AppType.inter(9,
+                                  color: trendPct <= 0
+                                      ? AppColors.home
+                                      : AppColors.danger,
+                                  weight: FontWeight.w700)),
                         ],
                       ),
                     ),
@@ -192,7 +254,9 @@ class _UsageTab extends StatelessWidget {
                         child: Column(
                           mainAxisAlignment: MainAxisAlignment.end,
                           children: [
-                            Text(v.toStringAsFixed(1), style: AppType.mono(7.5, color: AppColors.textMuted)),
+                            Text(v.toStringAsFixed(1),
+                                style: AppType.mono(7.5,
+                                    color: AppColors.textMuted)),
                             const SizedBox(height: 4),
                             AnimatedContainer(
                               duration: const Duration(milliseconds: 300),
@@ -203,7 +267,11 @@ class _UsageTab extends StatelessWidget {
                               ),
                             ),
                             const SizedBox(height: 6),
-                            Text(labels[i], style: AppType.mono(8, color: isToday ? AppColors.info : AppColors.textMuted)),
+                            Text(labels[i],
+                                style: AppType.mono(8,
+                                    color: isToday
+                                        ? AppColors.info
+                                        : AppColors.textMuted)),
                           ],
                         ),
                       ),
@@ -216,18 +284,21 @@ class _UsageTab extends StatelessWidget {
         ),
         const SizedBox(height: 12),
         GlassCard(
+          scene: EnergyScope.of(context).scene,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('USAGE WINDOWS', style: AppType.mono(9, color: AppColors.textSecondary, letterSpacing: 1.1)),
+              Text('USAGE WINDOWS',
+                  style: AppType.mono(9,
+                      color: AppColors.textSecondary, letterSpacing: 1.1)),
               const SizedBox(height: 14),
               Row(
                 children: [
                   DonutChart(
                     segments: [
-                      (home.periodDay, AppColors.todDay),
-                      (home.periodMorningEvening, AppColors.todTransition),
-                      (home.periodNight, AppColors.todNight),
+                      (home.periodDay ?? 0, AppColors.todDay),
+                      (home.periodMorningEvening ?? 0, AppColors.todTransition),
+                      (home.periodNight ?? 0, AppColors.todNight),
                     ],
                     size: 96,
                   ),
@@ -235,11 +306,23 @@ class _UsageTab extends StatelessWidget {
                   Expanded(
                     child: Column(
                       children: [
-                        _WindowRow(color: AppColors.todDay, label: 'Day', time: '9AM–6PM', pct: home.periodDay),
+                        _WindowRow(
+                            color: AppColors.todDay,
+                            label: 'Day',
+                            time: '9AM–6PM',
+                            pct: home.periodDay ?? 0),
                         const SizedBox(height: 12),
-                        _WindowRow(color: AppColors.todTransition, label: 'Transition', time: '5–9AM & 6–10PM', pct: home.periodMorningEvening),
+                        _WindowRow(
+                            color: AppColors.todTransition,
+                            label: 'Transition',
+                            time: '5–9AM & 6–10PM',
+                            pct: home.periodMorningEvening ?? 0),
                         const SizedBox(height: 12),
-                        _WindowRow(color: AppColors.todNight, label: 'Night', time: '10PM–5AM', pct: home.periodNight),
+                        _WindowRow(
+                            color: AppColors.todNight,
+                            label: 'Night',
+                            time: '10PM–5AM',
+                            pct: home.periodNight ?? 0),
                       ],
                     ),
                   ),
@@ -257,23 +340,33 @@ class _WindowRow extends StatelessWidget {
   final Color color;
   final String label, time;
   final double pct;
-  const _WindowRow({required this.color, required this.label, required this.time, required this.pct});
+  const _WindowRow(
+      {required this.color,
+      required this.label,
+      required this.time,
+      required this.pct});
 
   @override
   Widget build(BuildContext context) {
     return Row(
       children: [
-        Container(width: 7, height: 7, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
+        Container(
+            width: 7,
+            height: 7,
+            decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
         const SizedBox(width: 7),
         Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(label, style: AppType.inter(9.5, color: AppColors.textPrimary, weight: FontWeight.w700)),
+            Text(label,
+                style: AppType.inter(9.5,
+                    color: AppColors.textPrimary, weight: FontWeight.w700)),
             Text(time, style: AppType.mono(7.5, color: AppColors.textMuted)),
           ],
         ),
         const Spacer(),
-        Text('${pct.round()}%', style: AppType.mono(10, color: AppColors.textSecondary)),
+        Text('${pct.round()}%',
+            style: AppType.mono(10, color: AppColors.textSecondary)),
       ],
     );
   }
@@ -289,85 +382,127 @@ class _InverterTab extends StatelessWidget {
     return Column(
       children: [
         _DeviceHeader(
-          icon: Icons.wb_sunny_rounded, color: AppColors.solar,
-          name: 'Fronus Inverter', subtitle: 'Solar inverter telemetry',
-          live: inv.isOnline, lastFetched: 'just now',
+          icon: Icons.wb_sunny_rounded,
+          color: AppColors.solar,
+          name: 'Fronus Inverter',
+          subtitle: 'Solar inverter telemetry',
+          live: inv.isOnline,
+          lastFetched: 'just now',
         ),
         const SizedBox(height: 12),
-
         _SectionCard(
-          icon: Icons.wb_sunny_rounded, color: AppColors.solar, title: 'Solar (PV)',
+          icon: Icons.wb_sunny_rounded,
+          color: AppColors.solar,
+          title: 'Solar (PV)',
           children: [
             _TileRow([
               _Tile('Total Power', '${inv.solarW.round()} W', AppColors.solar),
-              _Tile('Avg Voltage', '${inv.solarV.toStringAsFixed(1)} V', AppColors.solar),
-              _Tile('Total Current', '${inv.solarA.toStringAsFixed(1)} A', AppColors.solar),
+              _Tile('Avg Voltage', '${inv.solarV.toStringAsFixed(1)} V',
+                  AppColors.solar),
+              _Tile('Total Current', '${inv.solarA.toStringAsFixed(1)} A',
+                  AppColors.solar),
             ]),
             const SizedBox(height: 10),
-            _SubRow('MPPT 1', '${inv.pv1V.toStringAsFixed(1)} V', '${inv.pv1A.toStringAsFixed(1)} A', '${inv.pv1W.round()} W'),
+            _SubRow('MPPT 1', '${inv.pv1V.toStringAsFixed(1)} V',
+                '${inv.pv1A.toStringAsFixed(1)} A', '${inv.pv1W.round()} W'),
             const SizedBox(height: 6),
-            _SubRow('MPPT 2', '${inv.pv2V.toStringAsFixed(1)} V', '${inv.pv2A.toStringAsFixed(1)} A', '${inv.pv2W.round()} W'),
+            _SubRow('MPPT 2', '${inv.pv2V.toStringAsFixed(1)} V',
+                '${inv.pv2A.toStringAsFixed(1)} A', '${inv.pv2W.round()} W'),
           ],
         ),
-
         _SectionCard(
-          icon: Icons.bolt_rounded, color: AppColors.grid, title: 'Grid',
+          icon: Icons.bolt_rounded,
+          color: AppColors.grid,
+          title: 'Grid',
           children: [
             _TileRow([
               _Tile('Power', '${inv.gridW.round()} W', AppColors.grid),
-              _Tile('Voltage', '${inv.gridV.toStringAsFixed(1)} V', AppColors.grid),
-              _Tile('Frequency', '${inv.gridHz.toStringAsFixed(2)} Hz', AppColors.grid),
+              _Tile('Voltage', '${inv.gridV.toStringAsFixed(1)} V',
+                  AppColors.grid),
+              _Tile('Frequency', '${inv.gridHz.toStringAsFixed(2)} Hz',
+                  AppColors.grid),
             ]),
             const SizedBox(height: 10),
             Row(
               children: [
-                _InlineStat(label: 'Connection', value: inv.gridConnected ? 'Connected' : 'Disconnected',
-                    color: inv.gridConnected ? AppColors.success : AppColors.danger),
+                _InlineStat(
+                    label: 'Connection',
+                    value: inv.gridConnected ? 'Connected' : 'Disconnected',
+                    color: inv.gridConnected
+                        ? AppColors.success
+                        : AppColors.danger),
                 const SizedBox(width: 14),
-                _InlineStat(label: 'Direction', value: inv.gridDirection == 'export' ? 'Exporting' : 'Importing',
-                    color: inv.gridDirection == 'export' ? AppColors.export : AppColors.danger),
+                _InlineStat(
+                    label: 'Direction',
+                    value: inv.gridDirection == 'export'
+                        ? 'Exporting'
+                        : 'Importing',
+                    color: inv.gridDirection == 'export'
+                        ? AppColors.export
+                        : AppColors.danger),
               ],
             ),
           ],
         ),
-
         _SectionCard(
-          icon: Icons.electric_bolt_rounded, color: AppColors.home, title: 'Load (AC Output)',
+          icon: Icons.electric_bolt_rounded,
+          color: AppColors.home,
+          title: 'Load (AC Output)',
           children: [
             _TileRow([
               _Tile('Active Power', '${inv.loadW.round()} W', AppColors.home),
-              _Tile('Apparent Power', '${inv.loadVa.round()} VA', AppColors.home),
+              _Tile(
+                  'Apparent Power', '${inv.loadVa.round()} VA', AppColors.home),
               _Tile('Load', '${inv.loadPercent.round()}%', AppColors.home),
             ]),
             const SizedBox(height: 10),
             Row(
               children: [
-                _InlineStat(label: 'Output V', value: '${inv.acOutV.toStringAsFixed(1)} V'),
+                _InlineStat(
+                    label: 'Output V',
+                    value: '${inv.acOutV.toStringAsFixed(1)} V'),
                 const SizedBox(width: 14),
-                _InlineStat(label: 'Output Hz', value: '${inv.acOutHz.toStringAsFixed(2)} Hz'),
+                _InlineStat(
+                    label: 'Output Hz',
+                    value: '${inv.acOutHz.toStringAsFixed(2)} Hz'),
                 const SizedBox(width: 14),
-                _InlineStat(label: 'Rated Output', value: '${inv.ratedOutputW.round()} W'),
+                _InlineStat(
+                    label: 'Rated Output',
+                    value: '${inv.ratedOutputW.round()} W'),
               ],
             ),
           ],
         ),
-
         _SectionCard(
-          icon: Icons.memory_rounded, color: AppColors.purple, title: 'Inverter Status',
+          icon: Icons.memory_rounded,
+          color: AppColors.purple,
+          title: 'Inverter Status',
           children: [
             _TileRow([
               _Tile('Mode', inv.inverterMode, AppColors.purple),
-              _Tile('Fault', inv.inverterFault, inv.inverterFault == 'NO' ? AppColors.textMuted : AppColors.danger),
-              _Tile('Temperature', '${inv.temperatureC.toStringAsFixed(1)}°C', AppColors.purple),
+              _Tile(
+                  'Fault',
+                  inv.inverterFault,
+                  inv.inverterFault == 'NO'
+                      ? AppColors.textMuted
+                      : AppColors.danger),
+              _Tile('Temperature', '${inv.temperatureC.toStringAsFixed(1)}°C',
+                  AppColors.purple),
             ]),
             const SizedBox(height: 10),
             Row(
               children: [
-                _InlineStat(label: 'Signal', value: inv.signal == null ? '—' : '${inv.signal!.round()} dBm'),
+                _InlineStat(
+                    label: 'Signal',
+                    value: inv.signal == null
+                        ? '—'
+                        : '${inv.signal!.round()} dBm'),
                 const SizedBox(width: 14),
                 _InlineStat(label: 'Firmware', value: inv.firmware ?? '—'),
                 const SizedBox(width: 14),
-                _InlineStat(label: 'Data Status', value: inv.isLive ? 'Live' : 'Stale',
+                _InlineStat(
+                    label: 'Data Status',
+                    value: inv.isLive ? 'Live' : 'Stale',
                     color: inv.isLive ? AppColors.success : AppColors.warning),
               ],
             ),
@@ -389,36 +524,51 @@ class _MeterTab extends StatelessWidget {
     return Column(
       children: [
         _DeviceHeader(
-          icon: Icons.memory_rounded, color: AppColors.grid,
-          name: 'Tomzn Meter', subtitle: 'Smart meter telemetry',
-          live: t.isOnline, lastFetched: 'just now',
+          icon: Icons.memory_rounded,
+          color: AppColors.grid,
+          name: 'Tomzn Meter',
+          subtitle: 'Smart meter telemetry',
+          live: t.isOnline,
+          lastFetched: 'just now',
         ),
         const SizedBox(height: 12),
-
         _SectionCard(
-          icon: Icons.bolt_rounded, color: AppColors.grid, title: 'Live Telemetry',
+          icon: Icons.bolt_rounded,
+          color: AppColors.grid,
+          title: 'Live Telemetry',
           children: [
             _TileRow([
               _Tile('Power', '${t.powerW.round()} W', AppColors.grid),
-              _Tile('Voltage', '${t.voltageV.toStringAsFixed(1)} V', AppColors.grid),
-              _Tile('Current', '${t.currentA.toStringAsFixed(1)} A', AppColors.grid),
+              _Tile('Voltage', '${t.voltageV.toStringAsFixed(1)} V',
+                  AppColors.grid),
+              _Tile('Current', '${t.currentA.toStringAsFixed(1)} A',
+                  AppColors.grid),
             ]),
             const SizedBox(height: 10),
             _TileRow([
-              _Tile('Frequency', '${t.frequencyHz.toStringAsFixed(2)} Hz', AppColors.grid),
-              _Tile('Total Energy', '${t.energyKwh.toStringAsFixed(1)} kWh', AppColors.grid),
-              _Tile('Active Meter', p.activeMeter == 'meter1' ? 'Meter 1' : 'Meter 2', AppColors.grid),
+              _Tile('Frequency', '${t.frequencyHz.toStringAsFixed(2)} Hz',
+                  AppColors.grid),
+              _Tile('Total Energy', '${t.energyKwh.toStringAsFixed(1)} kWh',
+                  AppColors.grid),
+              _Tile(
+                  'Active Meter',
+                  p.activeMeter == 'meter1' ? 'Meter 1' : 'Meter 2',
+                  AppColors.grid),
             ]),
           ],
         ),
-
         _SectionCard(
-          icon: Icons.warning_amber_rounded, color: AppColors.warning, title: 'Switch & Fault',
+          icon: Icons.warning_amber_rounded,
+          color: AppColors.warning,
+          title: 'Switch & Fault',
           children: [
             _TileRow([
-              _Tile('Switch', t.switchOn ? 'ON' : 'OFF', t.switchOn ? AppColors.success : AppColors.danger),
-              _Tile('Online', t.isOnline ? 'Online' : 'Offline', t.isOnline ? AppColors.success : AppColors.danger),
-              _Tile('Fault Code', '${t.faultCode}', t.faultCode == 0 ? AppColors.success : AppColors.danger),
+              _Tile('Switch', t.switchOn ? 'ON' : 'OFF',
+                  t.switchOn ? AppColors.success : AppColors.danger),
+              _Tile('Online', t.isOnline ? 'Online' : 'Offline',
+                  t.isOnline ? AppColors.success : AppColors.danger),
+              _Tile('Fault Code', '${t.faultCode}',
+                  t.faultCode == 0 ? AppColors.success : AppColors.danger),
             ]),
             const SizedBox(height: 10),
             Container(
@@ -427,19 +577,26 @@ class _MeterTab extends StatelessWidget {
               decoration: BoxDecoration(
                 color: AppColors.success.withValues(alpha: 0.08),
                 borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: AppColors.success.withValues(alpha: 0.2)),
+                border:
+                    Border.all(color: AppColors.success.withValues(alpha: 0.2)),
               ),
               child: Row(
                 children: [
-                  Icon(Icons.check_circle_rounded, size: 14, color: AppColors.success),
+                  Icon(Icons.check_circle_rounded,
+                      size: 14, color: AppColors.success),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text('No Faults', style: AppType.inter(9.5, color: AppColors.success, weight: FontWeight.w700)),
-                        Text('System is operating normally. No fault flags are active.',
-                            style: AppType.inter(8.5, color: AppColors.textSecondary, height: 1.4)),
+                        Text('No Faults',
+                            style: AppType.inter(9.5,
+                                color: AppColors.success,
+                                weight: FontWeight.w700)),
+                        Text(
+                            'System is operating normally. No fault flags are active.',
+                            style: AppType.inter(8.5,
+                                color: AppColors.textSecondary, height: 1.4)),
                       ],
                     ),
                   ),
@@ -448,17 +605,19 @@ class _MeterTab extends StatelessWidget {
             ),
           ],
         ),
-
         _SectionCard(
-          icon: Icons.trending_up_rounded, color: AppColors.grid, title: '24-Hour Usage',
+          icon: Icons.trending_up_rounded,
+          color: AppColors.grid,
+          title: '24-Hour Usage',
           subtitle: 'Hourly consumption',
           children: [
             _HourlyBars(points: p.flowHistory),
           ],
         ),
-
         _SectionCard(
-          icon: Icons.history_rounded, color: AppColors.grid, title: 'History (Recent 10)',
+          icon: Icons.history_rounded,
+          color: AppColors.grid,
+          title: 'History (Recent 10)',
           subtitle: 'Hourly records',
           children: [
             _HistoryList(points: p.flowHistory),
@@ -478,19 +637,27 @@ class _DeviceHeader extends StatelessWidget {
   final String lastFetched;
 
   const _DeviceHeader({
-    required this.icon, required this.color, required this.name,
-    required this.subtitle, required this.live, required this.lastFetched,
+    required this.icon,
+    required this.color,
+    required this.name,
+    required this.subtitle,
+    required this.live,
+    required this.lastFetched,
   });
 
   @override
   Widget build(BuildContext context) {
     return GlassCard(
+      scene: EnergyScope.of(context).scene,
       padding: const EdgeInsets.all(14),
       child: Row(
         children: [
           Container(
-            width: 40, height: 40,
-            decoration: BoxDecoration(color: color.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(12)),
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+                color: color.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(12)),
             child: Icon(icon, size: 20, color: color),
           ),
           const SizedBox(width: 12),
@@ -498,12 +665,19 @@ class _DeviceHeader extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(name, style: AppType.inter(13, color: AppColors.textPrimary, weight: FontWeight.w700, letterSpacing: -0.3)),
-                Text(subtitle, style: AppType.inter(9, color: AppColors.textMuted)),
+                Text(name,
+                    style: AppType.inter(13,
+                        color: AppColors.textPrimary,
+                        weight: FontWeight.w700,
+                        letterSpacing: -0.3)),
+                Text(subtitle,
+                    style: AppType.inter(9, color: AppColors.textMuted)),
               ],
             ),
           ),
-          StatusPill(color: live ? AppColors.success : AppColors.danger, label: live ? 'LIVE' : 'OFFLINE'),
+          StatusPill(
+              color: live ? AppColors.success : AppColors.danger,
+              label: live ? 'LIVE' : 'OFFLINE'),
         ],
       ),
     );
@@ -517,11 +691,17 @@ class _SectionCard extends StatelessWidget {
   final String? subtitle;
   final List<Widget> children;
 
-  const _SectionCard({required this.icon, required this.color, required this.title, this.subtitle, required this.children});
+  const _SectionCard(
+      {required this.icon,
+      required this.color,
+      required this.title,
+      this.subtitle,
+      required this.children});
 
   @override
   Widget build(BuildContext context) {
     return GlassCard(
+      scene: EnergyScope.of(context).scene,
       padding: const EdgeInsets.all(14),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -530,10 +710,13 @@ class _SectionCard extends StatelessWidget {
             children: [
               Icon(icon, size: 12, color: color),
               const SizedBox(width: 6),
-              Text(title.toUpperCase(), style: AppType.mono(8.5, color: AppColors.textSecondary, letterSpacing: 1.1)),
+              Text(title.toUpperCase(),
+                  style: AppType.mono(8.5,
+                      color: AppColors.textSecondary, letterSpacing: 1.1)),
               if (subtitle != null) ...[
                 const SizedBox(width: 8),
-                Text(subtitle!, style: AppType.inter(8.5, color: AppColors.textMuted)),
+                Text(subtitle!,
+                    style: AppType.inter(8.5, color: AppColors.textMuted)),
               ],
             ],
           ),
@@ -578,10 +761,14 @@ class _Tile extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label.toUpperCase(), style: AppType.mono(7, color: AppColors.textMuted, letterSpacing: 0.7)),
+          Text(label.toUpperCase(),
+              style: AppType.mono(7,
+                  color: AppColors.textMuted, letterSpacing: 0.7)),
           const SizedBox(height: 3),
-          Text(value, overflow: TextOverflow.ellipsis,
-              style: AppType.inter(11.5, color: color, weight: FontWeight.w700, letterSpacing: -0.2)),
+          Text(value,
+              overflow: TextOverflow.ellipsis,
+              style: AppType.inter(11.5,
+                  color: color, weight: FontWeight.w700, letterSpacing: -0.2)),
         ],
       ),
     );
@@ -600,7 +787,10 @@ class _InlineStat extends StatelessWidget {
         children: [
           Text('$label:', style: AppType.mono(7.5, color: AppColors.textMuted)),
           const SizedBox(width: 5),
-          Text(value, style: AppType.inter(9, color: color ?? AppColors.textPrimary, weight: FontWeight.w700)),
+          Text(value,
+              style: AppType.inter(9,
+                  color: color ?? AppColors.textPrimary,
+                  weight: FontWeight.w700)),
         ],
       ),
     );
@@ -615,7 +805,11 @@ class _SubRow extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
-        SizedBox(width: 52, child: Text(label, style: AppType.mono(7.5, color: AppColors.textMuted, letterSpacing: 0.7))),
+        SizedBox(
+            width: 52,
+            child: Text(label,
+                style: AppType.mono(7.5,
+                    color: AppColors.textMuted, letterSpacing: 0.7))),
         Expanded(child: _inline('V', v)),
         Expanded(child: _inline('A', a)),
         Expanded(child: _inline('W', w)),
@@ -658,7 +852,8 @@ class _HourlyBars extends StatelessWidget {
                 decoration: BoxDecoration(
                   color: isPeak
                       ? AppColors.info
-                      : AppColors.grid.withValues(alpha: 0.18 + 0.5 * (peak > 0 ? v / peak : 0)),
+                      : AppColors.grid.withValues(
+                          alpha: 0.18 + 0.5 * (peak > 0 ? v / peak : 0)),
                   borderRadius: BorderRadius.circular(3),
                 ),
               ),
@@ -698,12 +893,14 @@ class _HistoryList extends StatelessWidget {
                   ),
                 ),
                 Text('${((rows[i].loadKw ?? 0) * 1000).round()} W',
-                    style: AppType.inter(10, color: AppColors.textPrimary, weight: FontWeight.w700)),
+                    style: AppType.inter(10,
+                        color: AppColors.textPrimary, weight: FontWeight.w700)),
                 const SizedBox(width: 12),
                 SizedBox(
                   width: 64,
                   child: Text('${(rows[i].loadKw ?? 0).toStringAsFixed(2)} kWh',
-                      textAlign: TextAlign.right, style: AppType.mono(8.5, color: AppColors.textMuted)),
+                      textAlign: TextAlign.right,
+                      style: AppType.mono(8.5, color: AppColors.textMuted)),
                 ),
               ],
             ),

@@ -5,8 +5,13 @@ import 'package:flutter/material.dart';
 
 import '../theme/app_colors.dart';
 
-/// Circular remaining-units gauge. Color stays at base above 20 units and
-/// interpolates yellow → red below 20 (mirrors the native app).
+/// Circular remaining-units gauge — draws a partial arc (not a full circle)
+/// matching the Solar native app's SVG rings.
+///
+/// Meter gauges: 240° arc, start at 240° (gap centered at bottom).
+/// Middle total ring: 270° arc, start at 225° (gap centered at bottom).
+///
+/// Color stays at base above 20 units and interpolates yellow → red below 20.
 class CircularGauge extends StatelessWidget {
   final double value; // 0..1 remaining fraction
   final Color color;
@@ -14,6 +19,12 @@ class CircularGauge extends StatelessWidget {
   final double strokeWidth;
   final Widget? center;
   final double remainingUnits;
+
+  /// Arc sweep in degrees (240 for meter gauges, 270 for the middle ring).
+  final double arcSweep;
+
+  /// Start angle in degrees (150 for meter gauges, 135 for the middle ring).
+  final double startAngle;
 
   const CircularGauge({
     super.key,
@@ -23,6 +34,8 @@ class CircularGauge extends StatelessWidget {
     this.strokeWidth = 7,
     this.center,
     this.remainingUnits = 0,
+    this.arcSweep = 240,
+    this.startAngle = 150,
   });
 
   static Color gaugeColor(double remaining, Color base) {
@@ -47,9 +60,16 @@ class CircularGauge extends StatelessWidget {
         alignment: Alignment.center,
         children: [
           SizedBox(
-            width: size, height: size,
+            width: size,
+            height: size,
             child: CustomPaint(
-              painter: _GaugePainter(value.clamp(0.0, 1.0), c, strokeWidth),
+              painter: _ArcGaugePainter(
+                value.clamp(0.0, 1.0),
+                c,
+                strokeWidth,
+                arcSweep,
+                startAngle,
+              ),
             ),
           ),
           if (center != null) center!,
@@ -59,35 +79,59 @@ class CircularGauge extends StatelessWidget {
   }
 }
 
-class _GaugePainter extends CustomPainter {
+class _ArcGaugePainter extends CustomPainter {
   final double value;
   final Color color;
   final double strokeWidth;
-  _GaugePainter(this.value, this.color, this.strokeWidth);
+  final double arcSweep; // degrees
+  final double startAngle; // degrees
+
+  _ArcGaugePainter(
+    this.value,
+    this.color,
+    this.strokeWidth,
+    this.arcSweep,
+    this.startAngle,
+  );
 
   @override
   void paint(Canvas canvas, Size size) {
+    final radius = size.width / 2 - strokeWidth / 2;
     final rect = Rect.fromCircle(
       center: Offset(size.width / 2, size.height / 2),
-      radius: size.width / 2 - strokeWidth / 2,
+      radius: radius,
     );
+    // Convert degrees → radians. SVG rotate(150) means the arc starts at 150°
+    // measured clockwise from 3 o'clock. In Canvas, 0° is at 3 o'clock and
+    // angles increase clockwise. We offset by -90° so 0° is at 12 o'clock, then
+    // add the SVG start angle.
+    final start = (startAngle - 90) * pi / 180;
+    final sweep = arcSweep * pi / 180;
+
+    // Track (full arc background)
     final track = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = strokeWidth
-      ..color = AppColors.border;
-    canvas.drawArc(rect, -pi / 2, 2 * pi, false, track);
+      ..strokeCap = StrokeCap.round
+      ..color = color.withValues(alpha: 0.15);
+    canvas.drawArc(rect, start, sweep, false, track);
 
+    // Fill (value fraction of the arc)
     final arc = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = strokeWidth
       ..strokeCap = StrokeCap.round
       ..color = color;
-    canvas.drawArc(rect, -pi / 2, 2 * pi * value, false, arc);
+    canvas.drawArc(rect, start, sweep * value, false, arc);
   }
 
   @override
-  bool shouldRepaint(_GaugePainter old) =>
-      old.value != value || old.color != color || old.strokeWidth != strokeWidth;
+  bool shouldRepaint(_ArcGaugePainter old) =>
+      old.value != value ||
+      old.color != color ||
+      old.strokeWidth != strokeWidth ||
+      old.arcSweep != arcSweep ||
+      old.startAngle != startAngle;
 }
 
 /// Horizontal load gauge with idle / normal / high zones.
@@ -96,7 +140,11 @@ class LoadGauge extends StatelessWidget {
   final double maxW;
   final String status; // Low | Normal | High
 
-  const LoadGauge({super.key, required this.loadW, required this.maxW, required this.status});
+  const LoadGauge(
+      {super.key,
+      required this.loadW,
+      required this.maxW,
+      required this.status});
 
   @override
   Widget build(BuildContext context) {
@@ -116,14 +164,24 @@ class LoadGauge extends StatelessWidget {
             height: 14,
             child: Stack(
               children: [
-                // Zone segments
-                Positioned(left: 0, width: idle, height: 14,
-                  child: _zone(AppColors.textMuted.withValues(alpha: 0.16), BorderRadius.horizontal(left: Radius.circular(7)))),
-                Positioned(left: idle, width: normal, height: 14,
-                  child: _zone(AppColors.home.withValues(alpha: 0.16), BorderRadius.zero)),
-                Positioned(left: idle + normal, width: high, height: 14,
-                  child: _zone(AppColors.danger.withValues(alpha: 0.16), BorderRadius.horizontal(right: Radius.circular(7)))),
-                // Fill
+                Positioned(
+                    left: 0,
+                    width: idle,
+                    height: 14,
+                    child: _zone(AppColors.textMuted.withValues(alpha: 0.16),
+                        BorderRadius.horizontal(left: Radius.circular(7)))),
+                Positioned(
+                    left: idle,
+                    width: normal,
+                    height: 14,
+                    child: _zone(AppColors.home.withValues(alpha: 0.16),
+                        BorderRadius.zero)),
+                Positioned(
+                    left: idle + normal,
+                    width: high,
+                    height: 14,
+                    child: _zone(AppColors.danger.withValues(alpha: 0.16),
+                        BorderRadius.horizontal(right: Radius.circular(7)))),
                 Positioned(
                   left: 0,
                   width: max(8, w * pct),
@@ -132,16 +190,18 @@ class LoadGauge extends StatelessWidget {
                     decoration: BoxDecoration(
                       gradient: LinearGradient(
                         colors: [color.withValues(alpha: 0.55), color],
-                        begin: Alignment.centerLeft, end: Alignment.centerRight,
+                        begin: Alignment.centerLeft,
+                        end: Alignment.centerRight,
                       ),
                       borderRadius: BorderRadius.circular(7),
                     ),
                   ),
                 ),
-                // Marker
                 Positioned(
                   left: (w * pct - 4).clamp(0.0, w - 8),
-                  top: 2, width: 10, height: 10,
+                  top: 2,
+                  width: 10,
+                  height: 10,
                   child: Container(
                     decoration: BoxDecoration(
                       color: AppColors.textPrimary,
@@ -168,8 +228,8 @@ class LoadGauge extends StatelessWidget {
     );
   }
 
-  Widget _zone(Color color, BorderRadius radius) =>
-      DecoratedBox(decoration: BoxDecoration(color: color, borderRadius: radius));
+  Widget _zone(Color color, BorderRadius radius) => DecoratedBox(
+      decoration: BoxDecoration(color: color, borderRadius: radius));
 }
 
 /// Small segmented progress bar (solar/grid shares, day windows).
@@ -203,13 +263,18 @@ class DonutChart extends StatelessWidget {
   final double size;
   final double strokeWidth;
 
-  const DonutChart({super.key, required this.segments, this.size = 84, this.strokeWidth = 13});
+  const DonutChart(
+      {super.key,
+      required this.segments,
+      this.size = 84,
+      this.strokeWidth = 13});
 
   @override
   Widget build(BuildContext context) {
     final total = segments.fold<double>(0, (s, e) => s + e.$1);
     return SizedBox(
-      width: size, height: size,
+      width: size,
+      height: size,
       child: CustomPaint(
         painter: _DonutPainter(segments, total, strokeWidth),
       ),
