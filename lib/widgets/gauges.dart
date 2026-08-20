@@ -23,7 +23,7 @@ class CircularGauge extends StatelessWidget {
   /// Arc sweep in degrees (240 for meter gauges, 270 for the middle ring).
   final double arcSweep;
 
-  /// Start angle in degrees (150 for meter gauges, 135 for the middle ring).
+  /// Start angle in degrees (240 for meter gauges, 225 for the middle ring).
   final double startAngle;
 
   const CircularGauge({
@@ -35,7 +35,7 @@ class CircularGauge extends StatelessWidget {
     this.center,
     this.remainingUnits = 0,
     this.arcSweep = 240,
-    this.startAngle = 150,
+    this.startAngle = 240,
   });
 
   static Color gaugeColor(double remaining, Color base) {
