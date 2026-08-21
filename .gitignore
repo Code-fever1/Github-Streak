@@ -43,3 +43,8 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# streak-keeper: keep private config, cloned repo, and daily plans out of git
+/streak-keeper/config.json
+/streak-keeper/work/
+/streak-keeper/state/

@@ -1,0 +1,18 @@
+[Unit]
+Description=streak-keeper — GitHub contribution streak maintainer (single tick)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# ExecStart is filled in by install.sh with absolute paths.
+ExecStart=__NODE__ __APP_DIR__/src/index.js --once --config __CONFIG_PATH__
+Environment=STREAK_CONFIG=__CONFIG_PATH__
+Environment=HOME=__HOME__
+# Run as the installing user.
+User=__USER__
+WorkingDirectory=__APP_DIR__
+# Don't kill long runs too aggressively; a tick should finish in <2 min.
+TimeoutStartSec=300
+# Jitter so the timer doesn't always fire on the hour.
+RandomizedDelaySec=0

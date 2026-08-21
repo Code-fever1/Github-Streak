@@ -1,0 +1,13 @@
+[Unit]
+Description=Run streak-keeper hourly with jitter
+
+[Timer]
+# Fire roughly every hour, with up to ~25 min random jitter so commits
+# don't land on the exact top of the hour (feels more human).
+OnCalendar=hourly
+AccuracySec=1m
+RandomizedDelaySec=25m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

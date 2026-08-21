@@ -1,0 +1,27 @@
+{
+  "_comment": "Copy this file to config.json and fill in your values. All fields can also be overridden by environment variables (see src/config.js).",
+
+  "repoUrl": "git@github.com:your-user/your-private-repo.git",
+  "workDir": "$HOME/.streak-keeper/work",
+  "stateDir": "$HOME/.streak-keeper/state",
+
+  "git": {
+    "authorName": "streak-keeper",
+    "authorEmail": "streak-keeper@users.noreply.github.com",
+    "branch": "main",
+    "cloneDepth": 1
+  },
+
+  "schedule": {
+    "_comment": "Used by the planner. minPerHour/maxPerHour bound the commits in a single hourly run. dailyMin/dailyMax bound the total per day.",
+    "minPerHour": 1,
+    "maxPerHour": 5,
+    "dailyMin": 24,
+    "dailyMax": 100,
+    "quietDayChance": 0.18,
+    "quietDayMax": 16
+  },
+
+  "push": true,
+  "dryRun": false
+}
