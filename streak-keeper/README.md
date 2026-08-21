@@ -1,44 +1,58 @@
-# streak-keeper
+<p align="center">
+  <img src="./assets/banner.svg" alt="streak-keeper" width="100%" />
+</p>
 
-A server-side, systemd-timed Node.js tool that makes realistic, randomized commits to a private GitHub repository so your contribution streak stays green.
+<p align="center">
+  <a href="#quick-start"><img src="https://img.shields.io/badge/setup-3_steps-22c55e?logo=linux&style=for-the-badge" alt="setup: 3 steps" /></a>
+  <a href="#configuration"><img src="https://img.shields.io/badge/config-json_+_env-0ea5e9?style=for-the-badge" alt="config" /></a>
+  <a href="#systemd-management"><img src="https://img.shields.io/badge/runs-systemd_timer-8b5cf6?style=for-the-badge" alt="runs on systemd" /></a>
+  <img src="https://img.shields.io/badge/node-%3E%3D18-3b82f6?style=for-the-badge&logo=nodedotjs" alt="node >= 18" />
+  <img src="https://img.shields.io/badge/license-MIT-0ea5e9?style=for-the-badge" alt="license: MIT" />
+</p>
 
-## What it does
+<h2 align="center">A tiny, server-side bot that commits realistically to a private repo.</h2>
 
-- **Clones** a private repo on first run.
-- **Plans one day at a time** with realistic activity:
-  - Most days: 24–100 commits total.
-  - Occasional quiet days: 1–16 commits.
-  - Commits are distributed across waking hours, with random hour-to-hour intensity.
-- **Runs once per hour** via a user `systemd` timer.
-- **Makes 1–5 commits per active hour**, each editing:
-  - `COUNTER.md` — running JSON counter.
-  - `NOTES.md` — timestamped dev-style notes.
-  - `CHANGELOG.md` — short changelog line.
-- **Varied commit messages** so the history doesn't look machine-made.
-- **Pushes** to the configured `origin` branch.
+<p align="center">
+  It plans a full day of activity, then runs once per hour to make 1–5 commits. Some days are quiet, some are busy — just like a real person.
+</p>
 
-## Quick start
+---
+
+## :zap: What it does
+
+- :package: **Clones** a private repo on first run and keeps it in sync.
+- :brain: **Plans one day at a time** with realistic activity patterns.
+- :clock1: **Runs hourly** via a user `systemd` timer with randomized jitter.
+- :fire: **Makes 1–5 commits per active hour** to keep the graph green.
+- :speech_balloon: **Writes real-looking files**: `COUNTER.md`, `NOTES.md`, `CHANGELOG.md`.
+- :key: **All settings** can live in `config.json` or as environment variables.
+
+---
+
+## :rocket: Quick start
 
 ```bash
-cd /home/alijah/Documents/PROJECTS/Github-Streak/streak-keeper
+cd streak-keeper
 
-# 1. Copy and fill in the config.
+# 1. Copy and edit the config
 cp config.example.json config.json
-# edit config.json: set repoUrl, git identity, and optional schedule tweaks.
+# set repoUrl, authorName, authorEmail
 
-# 2. Make sure your git credentials/SSH key work for the private repo.
-#    (The script runs `git clone` and `git push` using the system git.)
+# 2. Make sure your machine can clone/push that repo
+# (SSH key, token, or git credentials)
 
-# 3. Install the systemd user timer.
+# 3. Install and enable the hourly timer
 ./install.sh
 
-# 4. Watch it run.
+# 4. Watch it work
 journalctl --user -u streak-keeper.service -f
 ```
 
-## Configuration
+---
 
-Edit `config.json` (or set environment variables). Minimal example:
+## :gear: Configuration
+
+### Minimal `config.json`
 
 ```json
 {
@@ -53,67 +67,69 @@ Edit `config.json` (or set environment variables). Minimal example:
 }
 ```
 
-All keys can be overridden with environment variables:
+### Environment overrides
 
-| Variable | Maps to |
-|----------|---------|
-| `STREAK_REPO_URL` | `repoUrl` |
-| `STREAK_WORK_DIR` | `workDir` |
-| `STREAK_STATE_DIR` | `stateDir` |
-| `STREAK_GIT_NAME` | `git.authorName` |
-| `STREAK_GIT_EMAIL` | `git.authorEmail` |
-| `STREAK_GIT_BRANCH` | `git.branch` |
-| `STREAK_PUSH` | `push` (`true`/`false`) |
-| `STREAK_DRY_RUN` | `dryRun` (`true`/`false`) |
+| Variable | Maps to | Example |
+|----------|---------|---------|
+| `STREAK_REPO_URL` | `repoUrl` | `git@github.com:...` |
+| `STREAK_WORK_DIR` | `workDir` | `$HOME/.streak-keeper/work` |
+| `STREAK_STATE_DIR` | `stateDir` | `$HOME/.streak-keeper/state` |
+| `STREAK_GIT_NAME` | `git.authorName` | `Your Name` |
+| `STREAK_GIT_EMAIL` | `git.authorEmail` | `you@example.com` |
+| `STREAK_GIT_BRANCH` | `git.branch` | `main` |
+| `STREAK_PUSH` | `push` | `true` / `false` |
+| `STREAK_DRY_RUN` | `dryRun` | `true` / `false` |
 
-## Commands
+---
 
-```bash
-# Run a single hourly tick now (also what the timer does).
-node src/index.js --once
+## :hammer: Commands
 
-# Print today's generated plan without committing.
-node src/index.js --plan-only
+| Command | What it does |
+|---------|--------------|
+| `node src/index.js --once` | Run a single hourly tick right now. |
+| `node src/index.js --plan-only` | Print today's plan without committing. |
+| `node src/index.js --self-test` | Run 800+ planner sanity checks. |
+| `node src/index.js -v --once` | Run a tick with debug logging. |
 
-# Run internal self-tests for the planner.
-node src/index.js --self-test
+---
 
-# Verbose debug logging.
-node src/index.js -v --once
-```
-
-## Systemd management
-
-The install script sets up a user timer that fires roughly every hour with a randomized 25-minute delay.
+## :hourglass: Systemd management
 
 ```bash
-# Trigger now
+# Trigger immediately
 systemctl --user start streak-keeper.service
 
-# Check timer
+# Check the schedule
 systemctl --user list-timers streak-keeper.timer
 
-# View recent logs
+# View logs
 journalctl --user -u streak-keeper.service -n 50
 
-# Disable
+# Stop completely
 systemctl --user disable --now streak-keeper.timer
 ```
 
-## How the randomization works
+---
 
-1. At the first run of each UTC day a plan is generated and stored under `stateDir`.
-2. The planner chooses a daily "mode":
-   - `quiet` ~18% of the time (low day; 1–16 commits).
-   - `normal`/`busy` the rest (24–100 commits).
-3. Commits are distributed across 24 hours using weighted activity windows:
-   - More likely in typical work/evening hours.
-   - Less likely during sleep / lunch.
-   - Capped at 5 commits per hour.
-4. Each actual run makes 1–5 commits with random dev-style messages and tags.
+## :game_die: How the randomization works
 
-## Security notes
+1. At the first run of each UTC day a new plan is written to `stateDir`.
+2. The day chooses a realistic mode:
+   - :leaves: **Quiet day** ~18% of the time: 1–16 commits.
+   - :chart_with_upwards_trend: **Normal / busy day** the rest: 24–100 commits.
+3. Commits are spread across 24 hours with waking/evening weighted windows.
+4. Each active hour produces 1–5 commits with varied dev-style messages.
 
-- Keep `config.json` out of git — it may contain the repo URL and is ignored via the top-level `.gitignore` by default.
-- Use an SSH key or token that only has access to the target repo.
-- This tool only touches the configured `workDir` and `stateDir`; it never writes anywhere else.
+---
+
+## :lock: Security notes
+
+- `config.json`, `work/`, and `state/` are ignored by the top-level `.gitignore` so they are not committed.
+- Use an SSH key or token with access only to the target repo.
+- The tool only writes to its configured `workDir` and `stateDir`.
+
+---
+
+<p align="center">
+  Built for people who like green squares.
+</p>

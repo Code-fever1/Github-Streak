@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 320" width="1200" height="320" fill="none" role="img" aria-label="streak-keeper banner">
+  <defs>
+    <radialGradient id="bg" cx="0.5" cy="0" r="1.2">
+      <stop offset="0" stop-color="#0f2318"/>
+      <stop offset="0.5" stop-color="#081212"/>
+      <stop offset="1" stop-color="#050a10"/>
+    </radialGradient>
+    <linearGradient id="glow" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#22c55e">
+        <animate attributeName="stop-color" values="#22c55e;#4ade80;#22c55e" dur="4s" repeatCount="indefinite"/>
+      </stop>
+      <stop offset="50%" stop-color="#34d399"/>
+      <stop offset="100%" stop-color="#16a34a">
+        <animate attributeName="stop-color" values="#16a34a;#22c55e;#16a34a" dur="4s" repeatCount="indefinite"/>
+      </stop>
+    </linearGradient>
+    <filter id="soft" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="2.5" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <rect width="1200" height="320" fill="url(#bg)" rx="0"/>
+
+  <!-- tiny stars -->
+  <g fill="#ffffff" opacity="0.06">
+    <circle cx="80" cy="60" r="1.5"/>
+    <circle cx="200" cy="40" r="1"/>
+    <circle cx="1050" cy="80" r="1.5"/>
+    <circle cx="1120" cy="150" r="1"/>
+    <circle cx="300" cy="90" r="1"/>
+    <circle cx="950" cy="250" r="1.2"/>
+  </g>
+
+  <!-- github contribution grid -->
+  <g transform="translate(375, 225)" opacity="0.85">
+    <g fill="#14532d">
+      <rect x="0" y="0" width="18" height="18" rx="3"/>
+      <rect x="24" y="0" width="18" height="18" rx="3"/>
+      <rect x="48" y="0" width="18" height="18" rx="3"/>
+      <rect x="72" y="0" width="18" height="18" rx="3"/>
+      <rect x="96" y="0" width="18" height="18" rx="3"/>
+      <rect x="120" y="0" width="18" height="18" rx="3"/>
+    </g>
+    <g fill="#22c55e">
+      <rect x="144" y="0" width="18" height="18" rx="3"/>
+      <rect x="168" y="0" width="18" height="18" rx="3"/>
+      <rect x="192" y="0" width="18" height="18" rx="3"/>
+      <rect x="216" y="0" width="18" height="18" rx="3"/>
+      <rect x="240" y="0" width="18" height="18" rx="3"/>
+      <rect x="264" y="0" width="18" height="18" rx="3"/>
+    </g>
+    <g fill="#4ade80" filter="url(#soft)">
+      <rect x="288" y="0" width="18" height="18" rx="3">
+        <animate attributeName="opacity" values="0.4;1;0.4" dur="2s" repeatCount="indefinite"/>
+      </rect>
+      <rect x="312" y="0" width="18" height="18" rx="3">
+        <animate attributeName="opacity" values="0.4;1;0.4" dur="2.3s" repeatCount="indefinite"/>
+      </rect>
+      <rect x="336" y="0" width="18" height="18" rx="3">
+        <animate attributeName="opacity" values="0.4;1;0.4" dur="2.6s" repeatCount="indefinite"/>
+      </rect>
+    </g>
+    <g fill="#166534">
+      <rect x="360" y="0" width="18" height="18" rx="3"/>
+      <rect x="384" y="0" width="18" height="18" rx="3"/>
+      <rect x="408" y="0" width="18" height="18" rx="3"/>
+    </g>
+  </g>
+
+  <!-- title -->
+  <text x="600" y="145" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="72" font-weight="800" fill="url(#glow)" letter-spacing="-2">streak-keeper</text>
+
+  <!-- tagline -->
+  <text x="600" y="188" text-anchor="middle" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="20" fill="#86efac" opacity="0.9">Keep your GitHub contribution graph alive, realistically.</text>
+
+  <!-- bottom micro divider -->
+  <rect x="500" y="280" width="200" height="2" fill="#22c55e" opacity="0.25" rx="1"/>
+</svg>
