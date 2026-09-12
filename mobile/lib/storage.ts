@@ -13,6 +13,7 @@ const FIXED_SLOT_PREFIX = '@streak/fixed-slot/';
 const QUEUE_KEY = '@streak/queue';
 const SSH_PREFIX = 'streak_ssh_';
 const SSH_FALLBACK = '@streak/ssh/';
+const TOKEN_PREFIX = 'tok_';
 
 export interface QueuedJob {
   id: string;

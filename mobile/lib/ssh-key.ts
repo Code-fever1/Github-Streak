@@ -1,4 +1,5 @@
-import { getPublicKeyAsync, utils } from '@noble/ed25519';
+import '@/lib/polyfills';
+import { getPublicKey, utils } from '@noble/ed25519';
 
 export interface SshKeyPair {
   privateKeyPem: string;
@@ -83,7 +84,7 @@ function encodePrivate(secretKey: Uint8Array, publicKey: Uint8Array, comment: st
 /** New random ed25519 key for this device/user. No Node sshpk. */
 export async function generateEd25519KeyPair(): Promise<SshKeyPair> {
   const secretKey = utils.randomSecretKey();
-  const publicKey = await getPublicKeyAsync(secretKey);
+  const publicKey = getPublicKey(secretKey);
   const comment = randomComment();
   return {
     privateKeyPem: encodePrivate(secretKey, publicKey, comment),
