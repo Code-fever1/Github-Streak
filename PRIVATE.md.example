@@ -1,0 +1,25 @@
+# Local notes — copy to PRIVATE.md (gitignored)
+
+Do not commit this file with real values. `PRIVATE.md` is in `.gitignore`.
+
+## Azure VM
+
+- Public IP: 
+- SSH user: azureuser
+- SSH: `ssh azureuser@YOUR_IP`
+
+## streak-keeper API
+
+- URL: http://YOUR_IP:8787
+- API token: (from server `streak-keeper/.env` → STREAK_API_TOKEN)
+
+## GitHub
+
+- Repo: owner/repo
+- Deploy key public: (paste in GitHub → Settings → Deploy keys)
+
+## Mobile .env
+
+```
+EXPO_PUBLIC_STREAK_SERVER_URL=http://YOUR_IP:8787
+```

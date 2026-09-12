@@ -22,6 +22,9 @@ function deepMerge(base, over) {
 }
 
 const ENV_MAP = {
+  STREAK_HOST: 'host',
+  STREAK_PORT: 'port',
+  STREAK_API_TOKEN: 'apiToken',
   STREAK_REPO_URL: 'repoUrl',
   STREAK_WORK_DIR: 'workDir',
   STREAK_STATE_DIR: 'stateDir',
@@ -58,7 +61,7 @@ function coerce(value) {
   return s;
 }
 
-export function loadConfig(configPath) {
+export function loadConfig(configPath, { requireRepo = true } = {}) {
   let fileConfig = {};
   const paths = [
     configPath,
@@ -111,8 +114,11 @@ export function loadConfig(configPath) {
   merged.schedule.quietDayMax ??= 16;
   merged.push ??= true;
   merged.dryRun ??= false;
+  merged.host ??= process.env.STREAK_HOST || '0.0.0.0';
+  merged.port ??= Number(process.env.STREAK_PORT || 8787);
+  merged.apiToken ??= process.env.STREAK_API_TOKEN || null;
 
-  if (!merged.repoUrl) {
+  if (requireRepo && !merged.repoUrl) {
     throw new Error('No repoUrl configured. Set repoUrl in config.json or STREAK_REPO_URL env var.');
   }
 

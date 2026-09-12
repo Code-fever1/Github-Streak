@@ -1,0 +1,17 @@
+[Unit]
+Description=streak-keeper API — always-on scheduler + phone remote
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=__NODE__ __APP_DIR__/src/index.js --serve --config __CONFIG_PATH__
+Environment=STREAK_CONFIG=__CONFIG_PATH__
+Environment=HOME=__HOME__
+User=__USER__
+WorkingDirectory=__APP_DIR__
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

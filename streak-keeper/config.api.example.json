@@ -1,0 +1,16 @@
+{
+  "_comment": "Optional API-mode config. Copy to config.json or pass --config. repoUrl is NOT required in --serve mode; projects come from the phone.",
+
+  "host": "0.0.0.0",
+  "port": 8787,
+  "workDir": "$HOME/.streak-keeper/work",
+  "stateDir": "$HOME/.streak-keeper/state",
+
+  "apiToken": "change-me-to-a-long-secret",
+
+  "git": {
+    "authorName": "streak-keeper",
+    "authorEmail": "streak-keeper@users.noreply.github.com",
+    "branch": "main"
+  }
+}

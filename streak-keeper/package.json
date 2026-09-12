@@ -9,6 +9,7 @@
   },
   "scripts": {
     "start": "node src/index.js",
+    "serve": "node src/index.js --serve",
     "plan": "node src/index.js --plan-only",
     "once": "node src/index.js --once",
     "test": "node src/index.js --self-test"

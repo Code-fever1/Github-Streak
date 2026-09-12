@@ -29,7 +29,24 @@
 
 ---
 
-## :rocket: Quick start
+## :iphone: Phone remote (recommended)
+
+The Expo app is a remote control. **Scheduled commits run on this server**, so the streak continues when the phone is offline. Instant **+1** from the app hits this API and commits immediately.
+
+```bash
+cd streak-keeper
+npm run serve
+```
+
+Copy the printed **API token** and your LAN IP into the app **Settings** tab (`http://YOUR-LAN-IP:8787`).
+
+SSH deploy keys are generated here with `ssh-keygen` and stored under `state/`. The phone only shows the public key.
+
+Optional: `STREAK_API_TOKEN`, `STREAK_PORT`, `STREAK_HOST`.
+
+---
+
+## :rocket: Quick start (CLI timer, single repo)
 
 ```bash
 cd streak-keeper

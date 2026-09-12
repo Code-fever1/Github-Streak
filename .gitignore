@@ -44,7 +44,36 @@ app.*.map.json
 /android/app/profile
 /android/app/release
 
-# streak-keeper: keep private config, cloned repo, and daily plans out of git
+# streak-keeper: private config, clones, API secrets, SSH keys
 /streak-keeper/config.json
+/streak-keeper/.env
+/streak-keeper/.env.*
+!/streak-keeper/.env.example
 /streak-keeper/work/
 /streak-keeper/state/
+/streak-keeper/local/
+**/secrets.json
+**/pending-keys.json
+
+# SSH / tokens — never commit
+**/.ssh/id_*
+!**/.ssh/*.pub.example
+*.pem
+*.key
+*_rsa
+*_ed25519
+!*_ed25519.pub
+
+# Expo / React Native
+/mobile/.expo/
+/mobile/dist/
+/mobile/web-build/
+/mobile/.env
+/mobile/.env.*
+!/mobile/.env.example
+
+# Local machine notes (Azure IP, tokens) — optional
+PRIVATE.md
+local-notes.md
+*.local.json
+!*.local.example.json

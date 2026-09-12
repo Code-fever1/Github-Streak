@@ -27,6 +27,10 @@
 ```
 Github-Streak/
 ├── .gitignore          # ignores Flutter artifacts and streak-keeper runtime files
+├── mobile/             # React Native (Expo) mobile app
+│   ├── app/            # screens (projects, activity, project detail)
+│   ├── lib/            # planner, GitHub API, scheduler
+│   └── README.md       # mobile setup guide
 ├── streak-keeper/      # the streak-keeping engine
 │   ├── src/            # source code
 │   ├── systemd/        # systemd user service + timer templates
@@ -39,9 +43,21 @@ Github-Streak/
 
 ---
 
-## :rocket: Quick start
+## :iphone: Mobile app
 
-All the action is inside `streak-keeper/`:
+Runs on the phone. Paste a GitHub repo, add the SSH key, done. Offline commits wait in a queue.
+
+```bash
+cd mobile && npm start
+```
+
+See [`mobile/README.md`](./mobile/README.md).
+
+---
+
+## :rocket: Quick start (server)
+
+All the server-side action is inside `streak-keeper/`:
 
 ```bash
 cd streak-keeper

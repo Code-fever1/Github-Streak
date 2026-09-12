@@ -4,14 +4,17 @@ import { GitRepo } from './git.js';
 import { Planner, buildDailyPlan } from './planner.js';
 import { Committer } from './committer.js';
 import { log, dbg, die, setVerbose } from './logger.js';
+import { createApi } from './server.js';
 
 function parseArgs(argv) {
-  const args = { once: false, planOnly: false, selfTest: false, verbose: false, config: null };
+  const args = { once: false, planOnly: false, selfTest: false, verbose: false, serve: false, config: null, port: null };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--once') args.once = true;
     else if (a === '--plan-only') args.planOnly = true;
     else if (a === '--self-test') args.selfTest = true;
+    else if (a === '--serve') args.serve = true;
+    else if (a === '--port') args.port = Number(argv[++i]);
     else if (a === '--verbose' || a === '-v') args.verbose = true;
     else if (a === '--config' || a === '-c') args.config = argv[++i];
     else if (a === '--help' || a === '-h') {
@@ -29,6 +32,8 @@ Usage:
   streak-keeper [options]
 
 Options:
+  --serve       Run the always-on API + scheduler (phone remote-controls this).
+  --port N      Listen port for --serve (default 8787).
   --once        Run a single hourly tick (make this hour's commits, push, exit).
                 This is what the systemd timer invokes.
   --plan-only   Generate (or read) today's plan and print it, then exit.
@@ -39,7 +44,8 @@ Options:
   -h, --help    Show this help.
 
 Configuration:
-  Copy config.example.json to config.json and set repoUrl.
+  Copy config.example.json to config.json and set repoUrl for CLI --once mode.
+  For the mobile API, run: node src/index.js --serve
   See README.md for systemd timer setup.`);
 }
 
@@ -129,9 +135,20 @@ async function main() {
 
   let config;
   try {
-    config = loadConfig(args.config);
+    config = loadConfig(args.config, { requireRepo: !args.serve && !args.selfTest });
   } catch (err) {
     die(err.message);
+  }
+
+  if (args.serve) {
+    createApi({
+      stateDir: config.stateDir,
+      workDir: config.workDir,
+      host: config.host,
+      port: args.port || config.port,
+      apiToken: config.apiToken,
+    });
+    return;
   }
 
   if (args.selfTest) {
