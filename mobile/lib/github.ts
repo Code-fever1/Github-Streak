@@ -208,14 +208,17 @@ export async function pushCommit(
   session: CommitSession,
   commitSha: string,
   parentSha: string,
+  opts: { checkHead?: boolean } = {},
 ): Promise<void> {
   await withRepoLock(session.project, async () => {
-    const current = await getBranchHeadSha(session.project);
-    if (current === commitSha) return;
-    if (current !== parentSha) {
-      throw new FastForwardError(
-        `Branch moved before push (${current.slice(0, 7)} != ${parentSha.slice(0, 7)})`,
-      );
+    if (opts.checkHead !== false) {
+      const current = await getBranchHeadSha(session.project);
+      if (current === commitSha) return;
+      if (current !== parentSha) {
+        throw new FastForwardError(
+          `Branch moved before push (${current.slice(0, 7)} != ${parentSha.slice(0, 7)})`,
+        );
+      }
     }
     const updateRes = await fetch(
       `${session.url}/git/refs/heads/${encodeURIComponent(session.project.branch)}`,

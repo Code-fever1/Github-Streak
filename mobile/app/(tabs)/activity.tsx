@@ -4,26 +4,20 @@ import { useCallback, useMemo } from 'react';
 import { useProjects } from '@/context/ProjectsContext';
 import { isFastForwardError } from '@/lib/github';
 import { isOfflineError } from '@/lib/offline';
+import type { PipelineSnapshot } from '@/lib/pipeline';
 import type { QueuedJob } from '@/lib/storage';
 import type { ActivityLog } from '@/lib/types';
 
-type Phase = 'committing' | 'queued' | 'committed' | 'failed';
+type Phase = 'queued' | 'committing' | 'committed' | 'failed';
 
-const PHASE_ORDER: Phase[] = ['committing', 'queued', 'committed', 'failed'];
+const PHASE_ORDER: Phase[] = ['queued', 'committing', 'committed', 'failed'];
 
 const PHASE_COPY: Record<Phase, { title: string; hint: string; tone: 'work' | 'wait' | 'done' | 'fail' }> = {
-  committing: { title: 'Being committed', hint: 'Writing this commit now', tone: 'work' },
-  queued: { title: 'Queued', hint: 'Waiting to write and push', tone: 'wait' },
-  committed: { title: 'Committed', hint: 'Pushing this commit now', tone: 'done' },
+  queued: { title: 'Queued', hint: 'Waiting to write', tone: 'wait' },
+  committing: { title: 'Being committed', hint: 'Writing the next commit object', tone: 'work' },
+  committed: { title: 'Committed', hint: 'Saved. Pushing one at a time.', tone: 'done' },
   failed: { title: 'Failed', hint: 'Same error grouped. Retry or delete.', tone: 'fail' },
 };
-
-function phaseOf(job: QueuedJob): Phase {
-  if (job.lastError && !isOfflineError(job.lastError) && !isFastForwardError(job.lastError)) return 'failed';
-  if (job.status === 'committing') return 'committing';
-  if (job.status === 'committed') return 'committed';
-  return 'queued';
-}
 
 function plus(n: number): string {
   return `+${n}`;
@@ -37,38 +31,68 @@ interface QueueGroup {
   n: number;
   ids: string[];
   error?: string;
-  newest: string;
 }
 
-function groupQueue(jobs: QueuedJob[]): QueueGroup[] {
+function groupsFromPipeline(pipeline: PipelineSnapshot[]): QueueGroup[] {
+  const groups: QueueGroup[] = [];
+  for (const row of pipeline) {
+    if (row.queued > 0) {
+      groups.push({
+        key: `queued|${row.projectId}`,
+        phase: 'queued',
+        projectId: row.projectId,
+        projectName: row.projectName,
+        n: row.queued,
+        ids: [],
+      });
+    }
+    if (row.writing > 0) {
+      groups.push({
+        key: `committing|${row.projectId}`,
+        phase: 'committing',
+        projectId: row.projectId,
+        projectName: row.projectName,
+        n: row.writing,
+        ids: [],
+      });
+    }
+    const committed = row.waitingPush + row.pushing;
+    if (committed > 0) {
+      groups.push({
+        key: `committed|${row.projectId}`,
+        phase: 'committed',
+        projectId: row.projectId,
+        projectName: row.projectName,
+        n: committed,
+        ids: [],
+      });
+    }
+  }
+  return groups;
+}
+
+function groupsFromFailed(jobs: QueuedJob[]): QueueGroup[] {
   const map = new Map<string, QueueGroup>();
   for (const job of jobs) {
-    const phase = phaseOf(job);
-    const errorKey = phase === 'failed' ? job.lastError || 'error' : '';
-    const key = `${phase}|${job.projectId}|${errorKey}`;
+    if (!job.lastError || isOfflineError(job.lastError) || isFastForwardError(job.lastError)) continue;
+    const key = `${job.projectId}|${job.lastError}`;
     const existing = map.get(key);
     if (existing) {
       existing.n += job.n;
       existing.ids.push(job.id);
-      if (job.createdAt > existing.newest) existing.newest = job.createdAt;
     } else {
       map.set(key, {
         key,
-        phase,
+        phase: 'failed',
         projectId: job.projectId,
         projectName: job.projectName || job.projectId,
         n: job.n,
         ids: [job.id],
-        error: phase === 'failed' ? job.lastError : undefined,
-        newest: job.createdAt,
+        error: job.lastError,
       });
     }
   }
-  return [...map.values()].sort((a, b) => {
-    const phaseDiff = PHASE_ORDER.indexOf(a.phase) - PHASE_ORDER.indexOf(b.phase);
-    if (phaseDiff !== 0) return phaseDiff;
-    return b.newest.localeCompare(a.newest);
-  });
+  return [...map.values()];
 }
 
 interface SentGroup {
@@ -104,7 +128,7 @@ function groupSent(logs: ActivityLog[]): SentGroup[] {
 }
 
 export default function ActivityScreen() {
-  const { logs, queue, refresh, retryQueueJobs, deleteQueueJobs } = useProjects();
+  const { logs, queue, pipeline, refresh, retryQueueJobs, deleteQueueJobs } = useProjects();
 
   useFocusEffect(
     useCallback(() => {
@@ -112,35 +136,38 @@ export default function ActivityScreen() {
     }, [refresh]),
   );
 
-  const queueGroups = useMemo(() => groupQueue(queue), [queue]);
+  const activeGroups = useMemo(() => groupsFromPipeline(pipeline), [pipeline]);
+  const failedGroups = useMemo(() => groupsFromFailed(queue), [queue]);
   const sentGroups = useMemo(() => groupSent(logs), [logs]);
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.list}>
       {PHASE_ORDER.map((phase) => {
-        const groups = queueGroups.filter((g) => g.phase === phase);
+        const groups = phase === 'failed' ? failedGroups : activeGroups.filter((g) => g.phase === phase);
         const copy = PHASE_COPY[phase];
         const total = groups.reduce((sum, g) => sum + g.n, 0);
         return (
-          <View key={phase}>
+          <View key={phase} style={styles.sectionBlock}>
             <Text style={styles.section}>
               {copy.title}
               {total > 0 ? `  ${plus(total)}` : ''}
             </Text>
-            {groups.length === 0 ? (
-              <Text style={styles.emptySection}>None</Text>
-            ) : (
-              groups.map((group) => (
-                <StatusCard
-                  key={group.key}
-                  group={group}
-                  hint={copy.hint}
-                  tone={copy.tone}
-                  onRetry={phase === 'failed' ? () => retryQueueJobs(group.ids) : undefined}
-                  onDelete={phase === 'failed' ? () => deleteQueueJobs(group.ids) : undefined}
-                />
-              ))
-            )}
+            <View style={styles.slot}>
+              {groups.length === 0 ? (
+                <Text style={styles.emptySection}>None</Text>
+              ) : (
+                groups.map((group) => (
+                  <StatusCard
+                    key={group.key}
+                    group={group}
+                    hint={copy.hint}
+                    tone={copy.tone}
+                    onRetry={phase === 'failed' ? () => retryQueueJobs(group.ids) : undefined}
+                    onDelete={phase === 'failed' ? () => deleteQueueJobs(group.ids) : undefined}
+                  />
+                ))
+              )}
+            </View>
           </View>
         );
       })}
@@ -151,10 +178,6 @@ export default function ActivityScreen() {
       ) : (
         sentGroups.map((group) => <SentCard key={group.key} group={group} />)
       )}
-
-      <Text style={styles.hint}>
-        +1 queues immediately. Each commit is pushed on its own; the next one is prepared while the previous push is in flight.
-      </Text>
     </ScrollView>
   );
 }
@@ -196,7 +219,7 @@ function StatusCard({
 
 function SentCard({ group }: { group: SentGroup }) {
   return (
-    <View style={[styles.row, styles.done]}>
+    <View style={[styles.row, styles.done, styles.sentRow]}>
       <View style={styles.rowHeader}>
         <Text style={styles.project}>{group.projectName}</Text>
         <Text style={[styles.plus, styles.plusOk]}>{plus(group.commits)}</Text>
@@ -212,6 +235,7 @@ function SentCard({ group }: { group: SentGroup }) {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#0d1117' },
   list: { padding: 16, paddingBottom: 40 },
+  sectionBlock: { marginBottom: 4 },
   section: {
     color: '#8b949e',
     fontSize: 12,
@@ -221,14 +245,15 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     marginTop: 8,
   },
+  slot: { minHeight: 86, justifyContent: 'center' },
   row: {
     backgroundColor: '#161b22',
     borderRadius: 12,
     padding: 14,
-    marginBottom: 10,
     borderWidth: 1,
     borderColor: '#30363d',
   },
+  sentRow: { marginBottom: 10 },
   work: { borderColor: '#d29922' },
   wait: { borderColor: '#1f6feb' },
   done: { borderColor: '#3fb950' },
@@ -240,8 +265,7 @@ const styles = StyleSheet.create({
   plusFail: { color: '#f85149' },
   message: { color: '#8b949e', marginTop: 6, fontSize: 13 },
   error: { color: '#f85149', marginTop: 6, fontSize: 12 },
-  hint: { color: '#6e7681', fontSize: 12, lineHeight: 18, marginTop: 8, textAlign: 'center' },
-  emptySection: { color: '#6e7681', fontSize: 13, marginBottom: 16 },
+  emptySection: { color: '#6e7681', fontSize: 13 },
   actions: { flexDirection: 'row', gap: 8, marginTop: 12 },
   retryBtn: {
     flex: 1,

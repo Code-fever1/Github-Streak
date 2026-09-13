@@ -1,20 +1,23 @@
 import { AppState, type AppStateStatus } from 'react-native';
 import { pushCommitsPipelined } from './committer';
 import { isFastForwardError } from './github';
+import { clearPipeline, initPipeline, beginWrite, finishWrite, beginPush, finishPush, rebuildPipeline, addQueued } from './pipeline';
 import { isOfflineError, isOnline } from './offline';
 import {
   appendLog,
   clearCheckpoint,
+  decrementProjectRemaining,
   enqueue,
   getLastFixedSlot,
   getLastTickAt,
+  getProjectRemaining,
+  normalizeProjectQueue,
   getTodayPlan,
   loadProjects,
   loadQueue,
+  mutateQueue,
   saveCheckpoint,
   savePlan,
-  saveQueue,
-  setJobStatus,
   setLastFixedSlot,
   setLastTickAt,
   currentFixedSlot,
@@ -54,65 +57,37 @@ function isRetryableJobError(msg?: string): boolean {
 }
 
 async function clearRetryableErrors(): Promise<QueuedJob[]> {
-  const loaded = await loadQueue();
-  const jobs = loaded.map((job) =>
-    job.lastError && isRetryableJobError(job.lastError)
-      ? { ...job, lastError: undefined, status: 'queued' as const }
-      : job,
-  );
-  if (jobs.some((job, i) => job.lastError !== loaded[i]?.lastError)) {
-    await saveQueue(jobs);
-  }
-  return jobs;
-}
-
-async function pendingFor(projectId: string): Promise<QueuedJob[]> {
-  return (await loadQueue()).filter((job) => job.projectId === projectId && !job.lastError);
-}
-
-async function consumeOneCommit(jobId: string): Promise<void> {
-  const q = await loadQueue();
-  await saveQueue(
-    q
-      .map((job) => {
-        if (job.id !== jobId) return job;
-        if (job.n <= 1) return null;
-        return { ...job, n: job.n - 1, lastError: undefined, status: 'queued' as const };
-      })
-      .filter((job): job is QueuedJob => job != null),
-  );
-}
-
-async function markProjectQueued(projectId: string): Promise<void> {
-  const q = await loadQueue();
-  await saveQueue(
-    q.map((job) =>
-      job.projectId === projectId && !job.lastError ? { ...job, status: 'queued' as const } : job,
+  return mutateQueue((loaded) =>
+    loaded.map((job) =>
+      job.lastError && isRetryableJobError(job.lastError)
+        ? { ...job, lastError: undefined, status: 'queued' as const }
+        : job,
     ),
   );
 }
 
-async function failCurrentJob(projectId: string, msg: string): Promise<void> {
-  const jobs = await pendingFor(projectId);
-  const current = jobs[0];
-  if (!current) return;
-  const q = await loadQueue();
-  await saveQueue(
-    q.map((job) =>
-      job.id === current.id ? { ...job, tries: job.tries + 1, lastError: msg, status: 'queued' as const } : job,
-    ),
-  );
+async function failActiveJob(projectId: string, msg: string): Promise<void> {
+  await mutateQueue((q) => {
+    const active = q.find((job) => job.projectId === projectId && !job.lastError);
+    if (!active) return q;
+    return q.map((job) =>
+      job.id === active.id
+        ? { ...job, tries: job.tries + 1, lastError: msg, status: 'queued' as const }
+        : job,
+    );
+  });
 }
 
 async function checkpointRemaining(projectId: string): Promise<void> {
-  const remaining = await pendingFor(projectId);
-  if (remaining.length === 0) {
+  const remaining = await getProjectRemaining(projectId);
+  if (remaining <= 0) {
     await clearCheckpoint(projectId);
     return;
   }
+  const jobs = (await loadQueue()).filter((job) => job.projectId === projectId && !job.lastError);
   await saveCheckpoint({
     projectId,
-    remaining: remaining.map((job) => ({ id: job.id, n: job.n })),
+    remaining: jobs.map((job) => ({ id: job.id, n: job.n })),
   });
 }
 
@@ -128,7 +103,7 @@ export function flushQueue(): Promise<void> {
         () => waiters.forEach((w) => w.resolve()),
         (err) => waiters.forEach((w) => w.reject(err)),
       );
-    }, 250);
+    }, 50);
   });
 }
 
@@ -161,22 +136,17 @@ async function drainQueue(): Promise<void> {
 
   const projects = await loadProjects();
   const byId = Object.fromEntries(projects.map((p) => [p.id, p]));
-  const pending = jobs.filter((job) => !job.lastError);
+  const pending = jobs.filter((job) => !job.lastError && job.n > 0);
   if (pending.length === 0) return;
 
-  const grouped = new Map<string, QueuedJob[]>();
-  for (const job of pending) {
-    const list = grouped.get(job.projectId) ?? [];
-    list.push(job);
-    grouped.set(job.projectId, list);
-  }
-
+  const projectIds = new Set(pending.map((job) => job.projectId));
   await Promise.all(
-    [...grouped.entries()].map(async ([projectId]) => {
+    [...projectIds].map(async (projectId) => {
       const project = byId[projectId];
       if (!project) {
-        await saveQueue((await loadQueue()).filter((job) => job.projectId !== projectId));
+        await mutateQueue((rows) => rows.filter((job) => job.projectId !== projectId));
         await clearCheckpoint(projectId);
+        clearPipeline(projectId);
         return;
       }
       await ensureProjectDrain(project);
@@ -195,76 +165,75 @@ function ensureProjectDrain(project: Project): Promise<void> {
 }
 
 async function drainProject(project: Project): Promise<void> {
-  while (true) {
-    if (isFlushPaused() && AppState.currentState !== 'active') {
-      await markProjectQueued(project.id);
-      await checkpointRemaining(project.id);
-      return;
-    }
-
-    const jobs = await pendingFor(project.id);
-    if (jobs.length === 0) {
-      await clearCheckpoint(project.id);
-      return;
-    }
-
-    const total = jobs.reduce((sum, job) => sum + job.n, 0);
-    if (total <= 0) {
-      await clearCheckpoint(project.id);
-      return;
-    }
-
-    try {
-      await pushCommitsPipelined(project, total, {
-        shouldStop: () => isFlushPaused() && AppState.currentState !== 'active',
-        onCommitting: async () => {
-          const current = (await pendingFor(project.id))[0];
-          if (current) await setJobStatus(current.id, 'committing');
-        },
-        onPushing: async () => {
-          const current = (await pendingFor(project.id))[0];
-          if (current) await setJobStatus(current.id, 'committed');
-        },
-        onPushed: async () => {
-          const current = (await pendingFor(project.id))[0];
-          if (!current) return;
-          await consumeOneCommit(current.id);
-          await appendLog({
-            id: `${project.id}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-            projectId: project.id,
-            projectName: project.name,
-            message: 'Pushed commit',
-            commits: 1,
-            timestamp: new Date().toISOString(),
-            success: true,
-            manual: current.manual,
-          });
-          const plan = await getTodayPlan(project);
-          await savePlan(project.id, recordCommits(plan, 1, new Date()));
-          await checkpointRemaining(project.id);
-        },
-      });
-    } catch (err) {
-      if (isFlushPaused()) {
-        await markProjectQueued(project.id);
-        await checkpointRemaining(project.id);
-        return;
-      }
-      if (isOfflineError(err)) {
-        lastOfflineAt = Date.now();
-        await markProjectQueued(project.id);
-        await checkpointRemaining(project.id);
-        return;
-      }
-      const msg = err instanceof Error ? err.message : String(err);
-      await failCurrentJob(project.id, msg);
-      await checkpointRemaining(project.id);
-    }
+  await normalizeProjectQueue(project.id);
+  const remaining = await getProjectRemaining(project.id);
+  if (remaining <= 0) {
+    clearPipeline(project.id);
+    return;
   }
+
+  initPipeline(project, remaining);
+  let planDirty = 0;
+  let planBase = await getTodayPlan(project);
+
+  try {
+    await pushCommitsPipelined(project, {
+      shouldStop: () => isFlushPaused() && AppState.currentState !== 'active',
+      beginWrite: () => beginWrite(project.id),
+      onWriteDone: () => finishWrite(project.id),
+      onPushStart: () => beginPush(project.id),
+      onPushDone: async () => {
+        finishPush(project.id);
+        const dropped = await decrementProjectRemaining(project.id);
+        planDirty += 1;
+        if (planDirty >= 3) {
+          planBase = recordCommits(planBase, planDirty, new Date());
+          await savePlan(project.id, planBase);
+          planDirty = 0;
+        }
+        void appendLog({
+          id: `${project.id}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          projectId: project.id,
+          projectName: project.name,
+          message: 'Pushed commit',
+          commits: 1,
+          timestamp: new Date().toISOString(),
+          success: true,
+          manual: dropped?.manual,
+        });
+      },
+      onRebuild: () => rebuildPipeline(project.id),
+    });
+
+    if (planDirty > 0) {
+      await savePlan(project.id, recordCommits(planBase, planDirty, new Date()));
+    }
+  } catch (err) {
+    if (planDirty > 0) {
+      await savePlan(project.id, recordCommits(planBase, planDirty, new Date()));
+    }
+    if (isFlushPaused()) {
+      await checkpointRemaining(project.id);
+      return;
+    }
+    if (isOfflineError(err)) {
+      lastOfflineAt = Date.now();
+      await checkpointRemaining(project.id);
+      return;
+    }
+    const msg = err instanceof Error ? err.message : String(err);
+    await failActiveJob(project.id, msg);
+    await checkpointRemaining(project.id);
+    return;
+  }
+
+  clearPipeline(project.id);
+  await clearCheckpoint(project.id);
 }
 
 export async function queueCommits(project: Project, n: number, manual: boolean): Promise<ActivityLog> {
   const job = await enqueue({ projectId: project.id, projectName: project.name, n, manual });
+  addQueued(project.id, n, project.name);
   const now = new Date();
   return {
     id: job.id,

@@ -1,9 +1,10 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { ActivityLog, DailyPlan, Project, TimerConfig } from '@/lib/types';
 import { DEFAULT_SCHEDULE, DEFAULT_TIMER } from '@/lib/types';
 import { parseRepoInput } from '@/lib/repo-url';
 import { generateEd25519KeyPair } from '@/lib/ssh-key';
 import { runQuickCommit, runScheduledTick, flushQueue } from '@/lib/scheduler';
+import { buildPipelineViews, subscribePipeline, type PipelineSnapshot } from '@/lib/pipeline';
 import {
   clearQueueJobErrors,
   deleteGithubToken,
@@ -18,6 +19,7 @@ import {
   saveGithubToken,
   saveProjects,
   saveSshKey,
+  subscribeLogs,
   subscribeQueue,
   type QueuedJob,
 } from '@/lib/storage';
@@ -27,6 +29,7 @@ interface ProjectsContextValue {
   projects: Project[];
   logs: ActivityLog[];
   queue: QueuedJob[];
+  pipeline: PipelineSnapshot[];
   lastTicks: Record<string, string | null>;
   pending: number;
   loading: boolean;
@@ -43,15 +46,32 @@ interface ProjectsContextValue {
   refresh: () => Promise<void>;
 }
 
+function queuedUnits(jobs: QueuedJob[]): number {
+  return jobs.filter((job) => !job.lastError).reduce((sum, job) => sum + job.n, 0);
+}
+
+function remainingMap(jobs: QueuedJob[]): Map<string, { n: number; projectName: string }> {
+  const map = new Map<string, { n: number; projectName: string }>();
+  for (const job of jobs) {
+    if (job.lastError || job.n <= 0) continue;
+    const cur = map.get(job.projectId) ?? { n: 0, projectName: job.projectName || job.projectId };
+    cur.n += job.n;
+    map.set(job.projectId, cur);
+  }
+  return map;
+}
+
 const ProjectsContext = createContext<ProjectsContextValue | null>(null);
 
 export function ProjectsProvider({ children }: { children: React.ReactNode }) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [logs, setLogs] = useState<ActivityLog[]>([]);
   const [queue, setQueue] = useState<QueuedJob[]>([]);
+  const [pipeline, setPipeline] = useState<PipelineSnapshot[]>([]);
   const [lastTicks, setLastTicks] = useState<Record<string, string | null>>({});
   const [pending, setPending] = useState(0);
   const [loading, setLoading] = useState(true);
+  const queueRef = useRef<QueuedJob[]>([]);
 
   const refresh = useCallback(async () => {
     const p = await loadProjects();
@@ -59,21 +79,38 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
     setProjects(p);
     setLogs(l.filter((entry) => !entry.message.startsWith('Queued')));
     setLastTicks(ticks);
+    queueRef.current = jobs;
     setQueue(jobs);
-    setPending(jobs.length);
+    setPending(queuedUnits(jobs));
+    setPipeline(buildPipelineViews(remainingMap(jobs)));
   }, []);
 
   useEffect(() => {
     refresh().finally(() => setLoading(false));
   }, [refresh]);
 
-  useEffect(
-    () =>
-      subscribeQueue(() => {
-        refresh().catch(() => {});
-      }),
-    [refresh],
-  );
+  useEffect(() => {
+    const applyJobs = (jobs: QueuedJob[]) => {
+      queueRef.current = jobs;
+      setQueue(jobs);
+      setPending(queuedUnits(jobs));
+      setPipeline(buildPipelineViews(remainingMap(jobs)));
+    };
+    const unsubQueue = subscribeQueue(applyJobs);
+    const unsubPipeline = subscribePipeline(() => {
+      setPipeline(buildPipelineViews(remainingMap(queueRef.current)));
+    });
+    const unsubLogs = subscribeLogs(() => {
+      loadLogs()
+        .then((l) => setLogs(l.filter((entry) => !entry.message.startsWith('Queued'))))
+        .catch(() => {});
+    });
+    return () => {
+      unsubQueue();
+      unsubPipeline();
+      unsubLogs();
+    };
+  }, []);
 
   const addProject = useCallback(async (repoUrl: string, githubToken: string) => {
     const parsed = parseRepoInput(repoUrl);
@@ -127,7 +164,7 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
     const jobs = await loadQueue();
     setProjects(next);
     setQueue(jobs);
-    setPending(jobs.length);
+    setPending(queuedUnits(jobs));
   }, [projects]);
 
   const toggleProject = useCallback(async (id: string) => {
@@ -175,6 +212,7 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
       projects,
       logs,
       queue,
+      pipeline,
       lastTicks,
       pending,
       loading,
@@ -194,6 +232,7 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
       projects,
       logs,
       queue,
+      pipeline,
       lastTicks,
       pending,
       loading,

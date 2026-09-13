@@ -150,17 +150,29 @@ export async function appendLog(entry: ActivityLog): Promise<void> {
   const logs = await loadLogs();
   logs.unshift(entry);
   await AsyncStorage.setItem(LOGS_KEY, JSON.stringify(logs.slice(0, 200)));
+  notifyLogs();
 }
 
-const queueListeners = new Set<() => void>();
+const queueListeners = new Set<(jobs: QueuedJob[]) => void>();
+const logListeners = new Set<() => void>();
+let queueChain: Promise<unknown> = Promise.resolve();
 
-export function subscribeQueue(listener: () => void): () => void {
+export function subscribeQueue(listener: (jobs: QueuedJob[]) => void): () => void {
   queueListeners.add(listener);
   return () => queueListeners.delete(listener);
 }
 
-function notifyQueue() {
-  queueListeners.forEach((fn) => fn());
+export function subscribeLogs(listener: () => void): () => void {
+  logListeners.add(listener);
+  return () => logListeners.delete(listener);
+}
+
+function notifyQueue(jobs: QueuedJob[]) {
+  queueListeners.forEach((fn) => fn(jobs));
+}
+
+function notifyLogs() {
+  logListeners.forEach((fn) => fn());
 }
 
 export async function loadQueue(): Promise<QueuedJob[]> {
@@ -171,25 +183,119 @@ export async function loadQueue(): Promise<QueuedJob[]> {
 
 export async function saveQueue(jobs: QueuedJob[]): Promise<void> {
   await AsyncStorage.setItem(QUEUE_KEY, JSON.stringify(jobs));
-  notifyQueue();
+  notifyQueue(jobs);
+}
+
+/** Serialize queue mutations so commit/push hooks cannot clobber each other. */
+export function mutateQueue(mutator: (jobs: QueuedJob[]) => QueuedJob[]): Promise<QueuedJob[]> {
+  const run = queueChain.then(async () => {
+    const next = mutator(await loadQueue());
+    await saveQueue(next);
+    return next;
+  });
+  queueChain = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
+}
+
+function phaseOfJob(job: QueuedJob): QueueStatus {
+  return job.status ?? 'queued';
+}
+
+function findPhaseJob(jobs: QueuedJob[], projectId: string, status: QueueStatus): QueuedJob | undefined {
+  return jobs.find((job) => job.projectId === projectId && !job.lastError && phaseOfJob(job) === status);
+}
+
+function dropOneFromJob(jobs: QueuedJob[], job: QueuedJob): QueuedJob[] {
+  if (job.n <= 1) return jobs.filter((item) => item.id !== job.id);
+  return jobs.map((item) => (item.id === job.id ? { ...item, n: item.n - 1 } : item));
+}
+
+export async function shiftQueuePhase(
+  projectId: string,
+  projectName: string,
+  from: QueueStatus,
+  to: QueueStatus,
+): Promise<boolean> {
+  let moved = false;
+  await mutateQueue((jobs) => {
+    const src = findPhaseJob(jobs, projectId, from);
+    if (!src || src.n <= 0) return jobs;
+    moved = true;
+    let next = dropOneFromJob(jobs, src);
+    const dest = findPhaseJob(next, projectId, to);
+    if (dest) {
+      return next.map((job) => (job.id === dest.id ? { ...job, n: job.n + 1 } : job));
+    }
+    next.push({
+      id: `${projectId}-${to}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      projectId,
+      projectName,
+      n: 1,
+      manual: src.manual,
+      createdAt: src.createdAt,
+      tries: 0,
+      status: to,
+    });
+    return next;
+  });
+  return moved;
+}
+
+export async function dropQueuePhaseUnit(projectId: string, status: QueueStatus): Promise<QueuedJob | null> {
+  let dropped: QueuedJob | null = null;
+  await mutateQueue((jobs) => {
+    const src = findPhaseJob(jobs, projectId, status);
+    if (!src) return jobs;
+    dropped = src;
+    return dropOneFromJob(jobs, src);
+  });
+  return dropped;
+}
+
+export async function resetProjectPhasesToQueued(projectId: string): Promise<void> {
+  await mutateQueue((jobs) => {
+    const active = jobs.filter((job) => job.projectId === projectId && !job.lastError);
+    const rest = jobs.filter((job) => job.projectId !== projectId || job.lastError);
+    const n = active.reduce((sum, job) => sum + job.n, 0);
+    if (n <= 0) return rest;
+    const sample = active[0];
+    rest.push({
+      id: `${projectId}-queued-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      projectId,
+      projectName: sample?.projectName,
+      n,
+      manual: active.some((job) => job.manual),
+      createdAt: sample?.createdAt ?? new Date().toISOString(),
+      tries: sample?.tries ?? 0,
+      status: 'queued',
+    });
+    return rest;
+  });
 }
 
 export async function setJobStatus(jobId: string, status: QueueStatus): Promise<void> {
-  const q = await loadQueue();
-  await saveQueue(q.map((job) => (job.id === jobId ? { ...job, status, lastError: undefined } : job)));
+  await mutateQueue((q) => q.map((job) => (job.id === jobId ? { ...job, status, lastError: undefined } : job)));
 }
 
 export async function enqueue(job: Omit<QueuedJob, 'id' | 'createdAt' | 'tries'>): Promise<QueuedJob> {
-  const full: QueuedJob = {
+  let full: QueuedJob = {
     ...job,
     id: `${job.projectId}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
     createdAt: new Date().toISOString(),
     tries: 0,
     status: 'queued',
   };
-  const q = await loadQueue();
-  q.push(full);
-  await saveQueue(q);
+  await mutateQueue((q) => {
+    const existing = findPhaseJob(q, job.projectId, 'queued');
+    if (existing) {
+      full = { ...existing, n: existing.n + job.n, manual: existing.manual || job.manual };
+      return q.map((item) => (item.id === existing.id ? full : item));
+    }
+    return [...q, full];
+  });
   return full;
 }
 
@@ -198,7 +304,50 @@ export function currentFixedSlot(now = new Date()): string {
 }
 
 export async function queuedCount(): Promise<number> {
-  return (await loadQueue()).length;
+  const jobs = await loadQueue();
+  return jobs.filter((job) => !job.lastError).reduce((sum, job) => sum + job.n, 0);
+}
+
+/** Collapse legacy per-phase rows into one queued counter per project. */
+export async function normalizeProjectQueue(projectId: string): Promise<void> {
+  await mutateQueue((jobs) => {
+    const active = jobs.filter((job) => job.projectId === projectId && !job.lastError);
+    if (active.length <= 1 && (active[0]?.status ?? 'queued') === 'queued') return jobs;
+    const n = active.reduce((sum, job) => sum + job.n, 0);
+    if (n <= 0) return jobs.filter((job) => job.projectId !== projectId || job.lastError);
+    const sample = active[0];
+    const rest = jobs.filter((job) => job.projectId !== projectId || job.lastError);
+    rest.push({
+      id: `${projectId}-queued-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      projectId,
+      projectName: sample?.projectName,
+      n,
+      manual: active.some((job) => job.manual),
+      createdAt: sample?.createdAt ?? new Date().toISOString(),
+      tries: sample?.tries ?? 0,
+      status: 'queued',
+    });
+    return rest;
+  });
+}
+
+export async function getProjectRemaining(projectId: string): Promise<number> {
+  const jobs = await loadQueue();
+  return jobs
+    .filter((job) => job.projectId === projectId && !job.lastError)
+    .reduce((sum, job) => sum + job.n, 0);
+}
+
+export async function decrementProjectRemaining(projectId: string): Promise<QueuedJob | null> {
+  let dropped: QueuedJob | null = null;
+  await mutateQueue((jobs) => {
+    const job = jobs.find((row) => row.projectId === projectId && !row.lastError && row.n > 0);
+    if (!job) return jobs;
+    dropped = { ...job, n: 1 };
+    if (job.n <= 1) return jobs.filter((row) => row.id !== job.id);
+    return jobs.map((row) => (row.id === job.id ? { ...row, n: row.n - 1 } : row));
+  });
+  return dropped;
 }
 
 export async function dropQueueJob(jobId: string): Promise<void> {
@@ -207,13 +356,11 @@ export async function dropQueueJob(jobId: string): Promise<void> {
 
 export async function dropQueueJobs(jobIds: string[]): Promise<void> {
   const drop = new Set(jobIds);
-  const q = await loadQueue();
-  await saveQueue(q.filter((job) => !drop.has(job.id)));
+  await mutateQueue((q) => q.filter((job) => !drop.has(job.id)));
 }
 
 export async function dropQueueForProject(projectId: string): Promise<void> {
-  const q = await loadQueue();
-  await saveQueue(q.filter((job) => job.projectId !== projectId));
+  await mutateQueue((q) => q.filter((job) => job.projectId !== projectId));
 }
 
 export async function clearQueueJobError(jobId: string): Promise<void> {
@@ -222,8 +369,7 @@ export async function clearQueueJobError(jobId: string): Promise<void> {
 
 export async function clearQueueJobErrors(jobIds: string[]): Promise<void> {
   const ids = new Set(jobIds);
-  const q = await loadQueue();
-  await saveQueue(
+  await mutateQueue((q) =>
     q.map((job) =>
       ids.has(job.id) ? { ...job, lastError: undefined, status: 'queued' as const } : job,
     ),
