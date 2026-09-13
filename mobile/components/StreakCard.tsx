@@ -4,11 +4,11 @@ import type { Project } from '@/lib/types';
 
 interface Props {
   project: Project;
+  commitsToday: number;
   commitsLeft: number;
-  thisHour: number;
 }
 
-export function StreakCard({ project, commitsLeft, thisHour }: Props) {
+export function StreakCard({ project, commitsToday, commitsLeft }: Props) {
   return (
     <View style={[styles.card, !project.enabled && styles.paused]}>
       <View style={styles.header}>
@@ -18,12 +18,12 @@ export function StreakCard({ project, commitsLeft, thisHour }: Props) {
         </View>
       </View>
       <Text style={styles.repo}>
-        {project.owner}/{project.repo} · SSH · {timerLabel(project)}
+        {project.owner}/{project.repo} · {timerLabel(project)}
       </Text>
       <View style={styles.stats}>
         <View style={styles.stat}>
-          <Text style={styles.statValue}>{thisHour}</Text>
-          <Text style={styles.statLabel}>this hour</Text>
+          <Text style={styles.statValue}>{commitsToday}</Text>
+          <Text style={styles.statLabel}>total today</Text>
         </View>
         <View style={styles.stat}>
           <Text style={styles.statValue}>{commitsLeft}</Text>

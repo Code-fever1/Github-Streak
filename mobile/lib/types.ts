@@ -39,7 +39,10 @@ export interface DailyPlan {
   date: string;
   isQuiet: boolean;
   target: number;
+  /** Remaining scheduled slots for today. */
   total: number;
+  /** Commits recorded today (manual +1 and scheduled). */
+  made?: number;
   hours: number[];
   createdAt: string;
 }

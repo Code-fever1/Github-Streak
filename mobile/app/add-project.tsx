@@ -11,19 +11,17 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import * as Clipboard from 'expo-clipboard';
 import * as WebBrowser from 'expo-web-browser';
 import { router } from 'expo-router';
 import { useProjects } from '@/context/ProjectsContext';
 import { parseRepoInput } from '@/lib/repo-url';
-import { deployKeysUrl } from '@/lib/ssh-key';
+
+const TOKEN_URL = 'https://github.com/settings/tokens/new?scopes=repo&description=Streak%20Keeper';
 
 export default function AddProjectScreen() {
   const { addProject } = useProjects();
   const [repoInput, setRepoInput] = useState('');
-  const [publicKey, setPublicKey] = useState('');
-  const [owner, setOwner] = useState('');
-  const [repo, setRepo] = useState('');
+  const [token, setToken] = useState('');
   const [saving, setSaving] = useState(false);
 
   const parsed = parseRepoInput(repoInput);
@@ -33,13 +31,15 @@ export default function AddProjectScreen() {
       Alert.alert('Need a repo', 'Paste a GitHub link, e.g. https://github.com/you/your-repo');
       return;
     }
+    if (!token.trim()) {
+      Alert.alert('Need a token', 'The phone pushes over HTTPS. SSH keys cannot push from Android.');
+      return;
+    }
     setSaving(true);
     try {
-      const result = await addProject(repoInput);
-      setOwner(result.project.owner);
-      setRepo(result.project.repo);
-      setPublicKey(result.publicKey);
-      await Clipboard.setStringAsync(result.publicKey);
+      await addProject(repoInput, token);
+      Alert.alert('Linked', 'Token saved on this device. You can tap +1 now.');
+      router.back();
     } catch (err) {
       Alert.alert('Could not link', err instanceof Error ? err.message : String(err));
     } finally {
@@ -47,22 +47,13 @@ export default function AddProjectScreen() {
     }
   };
 
-  const onCopy = async () => {
-    if (!publicKey) return;
-    await Clipboard.setStringAsync(publicKey);
-    Alert.alert('Copied', 'Paste it as a deploy key on GitHub (allow write).');
-  };
-
-  const onOpenGithub = async () => {
-    if (!owner || !repo) return;
-    await WebBrowser.openBrowserAsync(deployKeysUrl(owner, repo));
-  };
-
   return (
     <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      <ScrollView contentContainerStyle={styles.form}>
+      <ScrollView contentContainerStyle={styles.form} keyboardShouldPersistTaps="handled">
         <Text style={styles.title}>Link a repo</Text>
-        <Text style={styles.hint}>Paste the GitHub link. We create a unique SSH key for you — add it on GitHub, done.</Text>
+        <Text style={styles.hint}>
+          Paste the GitHub link and a personal access token with repo access. The phone commits over HTTPS — SSH deploy keys do not work here.
+        </Text>
 
         <Text style={styles.label}>Repo</Text>
         <TextInput
@@ -73,30 +64,26 @@ export default function AddProjectScreen() {
           placeholderTextColor="#6e7681"
           autoCapitalize="none"
           autoCorrect={false}
-          editable={!publicKey}
         />
 
-        {!publicKey ? (
-          <Pressable style={[styles.save, saving && styles.disabled]} onPress={onLink} disabled={saving}>
-            {saving ? <ActivityIndicator color="#fff" /> : <Text style={styles.saveText}>Generate SSH key & link</Text>}
-          </Pressable>
-        ) : (
-          <View style={styles.keyBox}>
-            <Text style={styles.keyLabel}>Add this deploy key on GitHub (write access)</Text>
-            <Text style={styles.key} selectable>
-              {publicKey}
-            </Text>
-            <Pressable style={styles.copy} onPress={onCopy}>
-              <Text style={styles.copyText}>Copy key</Text>
-            </Pressable>
-            <Pressable style={styles.github} onPress={onOpenGithub}>
-              <Text style={styles.githubText}>Open GitHub → Deploy keys</Text>
-            </Pressable>
-            <Pressable style={styles.save} onPress={() => router.back()}>
-              <Text style={styles.saveText}>Done</Text>
-            </Pressable>
-          </View>
-        )}
+        <Text style={styles.label}>GitHub token</Text>
+        <TextInput
+          style={styles.input}
+          value={token}
+          onChangeText={setToken}
+          placeholder="ghp_… or github_pat_…"
+          placeholderTextColor="#6e7681"
+          autoCapitalize="none"
+          autoCorrect={false}
+          secureTextEntry
+        />
+        <Pressable onPress={() => WebBrowser.openBrowserAsync(TOKEN_URL)}>
+          <Text style={styles.link}>Create a classic token (repo scope)</Text>
+        </Pressable>
+
+        <Pressable style={[styles.save, saving && styles.disabled]} onPress={onLink} disabled={saving}>
+          {saving ? <ActivityIndicator color="#fff" /> : <Text style={styles.saveText}>Link repo</Text>}
+        </Pressable>
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -119,6 +106,7 @@ const styles = StyleSheet.create({
     fontSize: 15,
     marginBottom: 16,
   },
+  link: { color: '#3fb950', fontWeight: '700', marginTop: -8, marginBottom: 20 },
   save: {
     backgroundColor: '#238636',
     borderRadius: 10,
@@ -127,26 +115,4 @@ const styles = StyleSheet.create({
   },
   disabled: { opacity: 0.7 },
   saveText: { color: '#fff', fontWeight: '700', fontSize: 16 },
-  keyBox: {
-    backgroundColor: '#161b22',
-    borderRadius: 12,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: '#30363d',
-  },
-  keyLabel: { color: '#8b949e', fontSize: 13, marginBottom: 8 },
-  key: { color: '#c9d1d9', fontSize: 12, lineHeight: 18 },
-  copy: { marginTop: 12, alignSelf: 'flex-start' },
-  copyText: { color: '#3fb950', fontWeight: '700' },
-  github: {
-    marginTop: 12,
-    backgroundColor: '#21262d',
-    borderRadius: 10,
-    paddingVertical: 12,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#30363d',
-    marginBottom: 12,
-  },
-  githubText: { color: '#e6edf3', fontWeight: '600' },
 });

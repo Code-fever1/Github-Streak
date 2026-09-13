@@ -6,6 +6,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from 'react-native';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
@@ -15,24 +16,43 @@ import { HourGrid } from '@/components/HourGrid';
 import { TimerPicker } from '@/components/TimerPicker';
 import { useProjects } from '@/context/ProjectsContext';
 import { useClock } from '@/hooks/useClock';
-import { commitsForCurrentHour, commitsForScheduledTick, timerLabel } from '@/lib/planner';
+import { commitsLeftToday, commitsMadeToday, timerLabel } from '@/lib/planner';
 import { confirmAction } from '@/lib/confirm';
+import { hasGithubToken } from '@/lib/storage';
 import { deployKeysUrl } from '@/lib/ssh-key';
 import type { DailyPlan, TimerConfig } from '@/lib/types';
 
 export default function ProjectDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
-  const { projects, getPlan, runTick, quickCommit, toggleProject, removeProject, updateTimer, lastTicks } = useProjects();
+  const {
+    projects,
+    getPlan,
+    runTick,
+    quickCommit,
+    toggleProject,
+    removeProject,
+    updateTimer,
+    saveToken,
+    lastTicks,
+    pending,
+  } = useProjects();
   const { hour, nextTickFor } = useClock(projects, lastTicks);
   const project = projects.find((p) => p.id === id);
   const [plan, setPlan] = useState<DailyPlan | null>(null);
   const [running, setRunning] = useState(false);
-  const [quickRunning, setQuickRunning] = useState(false);
   const [timerDraft, setTimerDraft] = useState<TimerConfig | null>(null);
+  const [tokenDraft, setTokenDraft] = useState('');
+  const [tokenSaved, setTokenSaved] = useState(false);
+  const [savingToken, setSavingToken] = useState(false);
 
   useEffect(() => {
     if (project) setTimerDraft(project.timer);
+  }, [project]);
+
+  useEffect(() => {
+    if (!project) return;
+    hasGithubToken(project.id).then(setTokenSaved);
   }, [project]);
 
   const load = useCallback(async () => {
@@ -42,7 +62,7 @@ export default function ProjectDetailScreen() {
 
   useEffect(() => {
     load();
-  }, [load, hour]);
+  }, [load, hour, pending]);
 
   if (!project || !timerDraft) {
     return (
@@ -64,16 +84,8 @@ export default function ProjectDetailScreen() {
   };
 
   const onQuickCommit = async () => {
-    setQuickRunning(true);
-    try {
-      const log = await quickCommit(project);
-      Alert.alert(
-        log.success ? (log.message.startsWith('Queued') ? 'Queued' : 'Streak +1') : 'Could not queue',
-        log.error ?? log.message,
-      );
-    } finally {
-      setQuickRunning(false);
-    }
+    await quickCommit(project);
+    await load();
   };
 
   const onSaveTimer = async () => {
@@ -83,6 +95,20 @@ export default function ProjectDetailScreen() {
 
   const onToggle = async () => {
     await toggleProject(project.id);
+  };
+
+  const onSaveToken = async () => {
+    setSavingToken(true);
+    try {
+      await saveToken(project.id, tokenDraft);
+      setTokenDraft('');
+      setTokenSaved(true);
+      Alert.alert('Token saved', 'This device can push over HTTPS. Tap +1 now.');
+    } catch (err) {
+      Alert.alert('Token not saved', err instanceof Error ? err.message : String(err));
+    } finally {
+      setSavingToken(false);
+    }
   };
 
   const onDelete = async () => {
@@ -95,8 +121,8 @@ export default function ProjectDetailScreen() {
     router.replace('/');
   };
 
-  const thisSlot = plan ? commitsForScheduledTick(project, plan) : 0;
-  const thisHour = plan ? commitsForCurrentHour(plan) : 0;
+  const todayTotal = plan ? commitsMadeToday(plan) : 0;
+  const leftToday = plan ? commitsLeftToday(plan) : 0;
 
   return (
     <>
@@ -106,9 +132,35 @@ export default function ProjectDetailScreen() {
           <Text style={styles.repo}>
             {project.owner}/{project.repo}
           </Text>
-          <Text style={styles.branch}>SSH deploy key · {project.branch}</Text>
+          <Text style={styles.branch}>
+            {tokenSaved ? 'GitHub token · HTTPS' : 'Needs a GitHub token'} · {project.branch}
+          </Text>
           <Text style={styles.countdown}>{nextTickFor(project)}</Text>
           <Text style={styles.countdownLabel}>until next tick ({timerLabel(project)})</Text>
+        </View>
+
+        <View style={styles.keyBox}>
+          <Text style={styles.keyLabel}>
+            {tokenSaved
+              ? 'GitHub token is saved on this phone. Paste a new one to replace it.'
+              : 'SSH keys cannot push from the phone. Paste a personal access token with repo access.'}
+          </Text>
+          <TextInput
+            style={styles.tokenInput}
+            value={tokenDraft}
+            onChangeText={setTokenDraft}
+            placeholder="ghp_… or github_pat_…"
+            placeholderTextColor="#6e7681"
+            autoCapitalize="none"
+            autoCorrect={false}
+            secureTextEntry
+          />
+          <Pressable onPress={() => WebBrowser.openBrowserAsync('https://github.com/settings/tokens/new?scopes=repo&description=Streak%20Keeper')}>
+            <Text style={styles.link}>Create a classic token (repo scope)</Text>
+          </Pressable>
+          <Pressable style={styles.secondary} onPress={onSaveToken} disabled={savingToken}>
+            {savingToken ? <ActivityIndicator color="#fff" /> : <Text style={styles.secondaryText}>Save token</Text>}
+          </Pressable>
         </View>
 
         {project.sshPublicKey ? (
@@ -132,22 +184,17 @@ export default function ProjectDetailScreen() {
         ) : null}
 
         <View style={styles.statsRow}>
-          <Stat label="This slot" value={String(thisSlot)} />
-          <Stat label="This hour" value={String(thisHour)} />
-          <Stat label="Left today" value={String(plan?.total ?? '—')} />
+          <Stat label="Total today" value={String(plan ? todayTotal : '—')} />
+          <Stat label="Left today" value={String(plan ? leftToday : '—')} />
           <Stat label="Target" value={String(plan?.target ?? '—')} />
         </View>
 
         {plan ? <HourGrid plan={plan} currentHour={hour} /> : <ActivityIndicator color="#3fb950" style={{ marginTop: 20 }} />}
 
-        <Pressable style={styles.quick} onPress={onQuickCommit} disabled={quickRunning}>
-          {quickRunning ? (
-            <ActivityIndicator color="#fff" />
-          ) : (
-            <Text style={styles.quickText}>Commit +1 now</Text>
-          )}
+        <Pressable style={styles.quick} onPress={onQuickCommit}>
+          <Text style={styles.quickText}>Commit +1 now</Text>
         </Pressable>
-        <Text style={styles.quickHint}>Sends now if online, otherwise queues until you are back.</Text>
+        <Text style={styles.quickHint}>Adds to Queued immediately. GitHub send happens in the background.</Text>
 
         <Pressable style={styles.primary} onPress={onRunNow} disabled={running}>
           {running ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryText}>Run scheduled tick</Text>}
@@ -208,6 +255,16 @@ const styles = StyleSheet.create({
   },
   keyLabel: { color: '#8b949e', fontSize: 12, marginBottom: 8 },
   key: { color: '#c9d1d9', fontSize: 11, lineHeight: 16 },
+  tokenInput: {
+    backgroundColor: '#0d1117',
+    borderWidth: 1,
+    borderColor: '#30363d',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    color: '#e6edf3',
+    fontSize: 15,
+  },
   link: { color: '#3fb950', fontWeight: '700', marginTop: 10 },
   statsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 16 },
   stat: {

@@ -11,18 +11,23 @@ const LOGS_KEY = '@streak/logs';
 const LAST_TICK_PREFIX = '@streak/last-tick/';
 const FIXED_SLOT_PREFIX = '@streak/fixed-slot/';
 const QUEUE_KEY = '@streak/queue';
+const CHECKPOINT_KEY = '@streak/drain-checkpoint';
 const SSH_PREFIX = 'streak_ssh_';
 const SSH_FALLBACK = '@streak/ssh/';
 const TOKEN_PREFIX = 'tok_';
 
+export type QueueStatus = 'queued' | 'committing' | 'committed';
+
 export interface QueuedJob {
   id: string;
   projectId: string;
+  projectName?: string;
   n: number;
   manual: boolean;
   createdAt: string;
   tries: number;
   lastError?: string;
+  status?: QueueStatus;
 }
 
 async function saveSecure(id: string, value: string): Promise<void> {
@@ -81,6 +86,23 @@ export async function deleteSshKey(projectId: string): Promise<void> {
   await deleteSecure(projectId);
 }
 
+export async function saveGithubToken(projectId: string, token: string): Promise<void> {
+  await saveSecure(`${TOKEN_PREFIX}${projectId}`, token.trim());
+}
+
+export async function getGithubToken(projectId: string): Promise<string | null> {
+  const v = await getSecure(`${TOKEN_PREFIX}${projectId}`);
+  return v?.trim() || null;
+}
+
+export async function deleteGithubToken(projectId: string): Promise<void> {
+  await deleteSecure(`${TOKEN_PREFIX}${projectId}`);
+}
+
+export async function hasGithubToken(projectId: string): Promise<boolean> {
+  return Boolean(await getGithubToken(projectId));
+}
+
 export async function getTodayPlan(project: Project): Promise<DailyPlan> {
   const key = `${PLANS_PREFIX}${project.id}/${todayKey()}`;
   const raw = await AsyncStorage.getItem(key);
@@ -130,6 +152,17 @@ export async function appendLog(entry: ActivityLog): Promise<void> {
   await AsyncStorage.setItem(LOGS_KEY, JSON.stringify(logs.slice(0, 200)));
 }
 
+const queueListeners = new Set<() => void>();
+
+export function subscribeQueue(listener: () => void): () => void {
+  queueListeners.add(listener);
+  return () => queueListeners.delete(listener);
+}
+
+function notifyQueue() {
+  queueListeners.forEach((fn) => fn());
+}
+
 export async function loadQueue(): Promise<QueuedJob[]> {
   const raw = await AsyncStorage.getItem(QUEUE_KEY);
   if (!raw) return [];
@@ -138,6 +171,12 @@ export async function loadQueue(): Promise<QueuedJob[]> {
 
 export async function saveQueue(jobs: QueuedJob[]): Promise<void> {
   await AsyncStorage.setItem(QUEUE_KEY, JSON.stringify(jobs));
+  notifyQueue();
+}
+
+export async function setJobStatus(jobId: string, status: QueueStatus): Promise<void> {
+  const q = await loadQueue();
+  await saveQueue(q.map((job) => (job.id === jobId ? { ...job, status, lastError: undefined } : job)));
 }
 
 export async function enqueue(job: Omit<QueuedJob, 'id' | 'createdAt' | 'tries'>): Promise<QueuedJob> {
@@ -146,6 +185,7 @@ export async function enqueue(job: Omit<QueuedJob, 'id' | 'createdAt' | 'tries'>
     id: `${job.projectId}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
     createdAt: new Date().toISOString(),
     tries: 0,
+    status: 'queued',
   };
   const q = await loadQueue();
   q.push(full);
@@ -161,7 +201,71 @@ export async function queuedCount(): Promise<number> {
   return (await loadQueue()).length;
 }
 
+export async function dropQueueJob(jobId: string): Promise<void> {
+  await dropQueueJobs([jobId]);
+}
+
+export async function dropQueueJobs(jobIds: string[]): Promise<void> {
+  const drop = new Set(jobIds);
+  const q = await loadQueue();
+  await saveQueue(q.filter((job) => !drop.has(job.id)));
+}
+
 export async function dropQueueForProject(projectId: string): Promise<void> {
   const q = await loadQueue();
   await saveQueue(q.filter((job) => job.projectId !== projectId));
+}
+
+export async function clearQueueJobError(jobId: string): Promise<void> {
+  await clearQueueJobErrors([jobId]);
+}
+
+export async function clearQueueJobErrors(jobIds: string[]): Promise<void> {
+  const ids = new Set(jobIds);
+  const q = await loadQueue();
+  await saveQueue(
+    q.map((job) =>
+      ids.has(job.id) ? { ...job, lastError: undefined, status: 'queued' as const } : job,
+    ),
+  );
+}
+
+export interface DrainCheckpoint {
+  projectId: string;
+  remaining: Array<{ id: string; n: number }>;
+  baseSha?: string;
+  headSha?: string;
+  treeSha?: string;
+  counter?: string;
+  notes?: string;
+  changelog?: string;
+  chunkMade?: number;
+}
+
+async function loadCheckpointMap(): Promise<Record<string, DrainCheckpoint>> {
+  const raw = await AsyncStorage.getItem(CHECKPOINT_KEY);
+  if (!raw) return {};
+  try {
+    return JSON.parse(raw) as Record<string, DrainCheckpoint>;
+  } catch {
+    return {};
+  }
+}
+
+export async function loadCheckpoint(projectId: string): Promise<DrainCheckpoint | null> {
+  const map = await loadCheckpointMap();
+  return map[projectId] ?? null;
+}
+
+export async function saveCheckpoint(cp: DrainCheckpoint): Promise<void> {
+  const map = await loadCheckpointMap();
+  map[cp.projectId] = cp;
+  await AsyncStorage.setItem(CHECKPOINT_KEY, JSON.stringify(map));
+}
+
+export async function clearCheckpoint(projectId: string): Promise<void> {
+  const map = await loadCheckpointMap();
+  if (!(projectId in map)) return;
+  delete map[projectId];
+  await AsyncStorage.setItem(CHECKPOINT_KEY, JSON.stringify(map));
 }

@@ -83,9 +83,18 @@ export function buildDailyPlan(schedule: ScheduleConfig, date = new Date()): Dai
     isQuiet,
     target,
     total,
+    made: 0,
     hours,
     createdAt: new Date().toISOString(),
   };
+}
+
+export function commitsMadeToday(plan: DailyPlan): number {
+  return plan.made ?? Math.max(0, plan.target - plan.total);
+}
+
+export function commitsLeftToday(plan: DailyPlan): number {
+  return Math.max(0, plan.target - commitsMadeToday(plan));
 }
 
 export function commitsForCurrentHour(plan: DailyPlan, now = new Date()): number {
@@ -112,7 +121,8 @@ export function recordCommits(plan: DailyPlan, n: number, now = new Date()): Dai
   const hours = [...plan.hours];
   hours[hour] = Math.max(0, hours[hour] - n);
   const total = hours.reduce((s, x) => s + x, 0);
-  return { ...plan, hours, total };
+  const made = commitsMadeToday(plan) + n;
+  return { ...plan, hours, total, made };
 }
 
 export function parseTimeToMinutes(value: string): number {

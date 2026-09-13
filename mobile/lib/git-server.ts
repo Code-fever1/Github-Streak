@@ -1,7 +1,10 @@
+import { Platform } from 'react-native';
 import type { Project } from './types';
 
 function serverBases(): string[] {
   const extra = process.env.EXPO_PUBLIC_STREAK_SERVER_URL?.replace(/\/$/, '');
+  // Never hit http://127.0.0.1 from Android/iOS — that is the phone, and HTTP is blocked as cleartext.
+  if (Platform.OS !== 'web') return extra ? [extra] : [];
   const bases = [extra, 'http://127.0.0.1:8787', 'http://localhost:8787'].filter(
     (v, i, arr): v is string => Boolean(v) && arr.indexOf(v) === i,
   );

@@ -1,20 +1,19 @@
 import { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Link, useFocusEffect } from 'expo-router';
 import { StreakCard } from '@/components/StreakCard';
 import { useProjects } from '@/context/ProjectsContext';
 import { useClock } from '@/hooks/useClock';
 import { confirmAction } from '@/lib/confirm';
-import { commitsForScheduledTick } from '@/lib/planner';
+import { commitsLeftToday, commitsMadeToday } from '@/lib/planner';
 import type { DailyPlan, Project } from '@/lib/types';
 
 type ProjectRow = Project & { plan?: DailyPlan };
 
 export default function ProjectsScreen() {
-  const { projects, loading, getPlan, quickCommit, removeProject, lastTicks, pending } = useProjects();
+  const { projects, loading, getPlan, quickCommit, removeProject, lastTicks, pending, logs } = useProjects();
   const { countdown } = useClock(projects, lastTicks);
   const [rows, setRows] = useState<ProjectRow[]>([]);
-  const [quickId, setQuickId] = useState<string | null>(null);
 
   const loadPlans = useCallback(async () => {
     const enriched = await Promise.all(projects.map(async (p) => ({ ...p, plan: await getPlan(p) })));
@@ -29,16 +28,10 @@ export default function ProjectsScreen() {
 
   useEffect(() => {
     loadPlans();
-  }, [loadPlans]);
+  }, [loadPlans, pending, logs]);
 
   const onQuickCommit = async (project: Project) => {
-    setQuickId(project.id);
-    try {
-      const log = await quickCommit(project);
-      Alert.alert(log.success ? (log.message.startsWith('Queued') ? 'Queued' : 'Streak +1') : 'Could not queue', log.error ?? log.message);
-    } finally {
-      setQuickId(null);
-    }
+    await quickCommit(project);
   };
 
   const onDelete = async (project: Project) => {
@@ -72,7 +65,7 @@ export default function ProjectsScreen() {
       {projects.length === 0 ? (
         <View style={styles.empty}>
           <Text style={styles.emptyTitle}>No repo yet</Text>
-          <Text style={styles.emptyText}>Paste a GitHub link. We give you an SSH key to add on GitHub.</Text>
+          <Text style={styles.emptyText}>Paste a GitHub link and a personal access token with repo access.</Text>
           <Link href="/add-project" asChild>
             <Pressable style={styles.cta}>
               <Text style={styles.ctaText}>Add repo</Text>
@@ -91,22 +84,14 @@ export default function ProjectsScreen() {
                   <Pressable style={({ pressed }) => pressed && styles.cardPressed}>
                     <StreakCard
                       project={item}
-                      commitsLeft={item.plan?.total ?? 0}
-                      thisHour={item.plan ? commitsForScheduledTick(item, item.plan) : 0}
+                      commitsToday={item.plan ? commitsMadeToday(item.plan) : 0}
+                      commitsLeft={item.plan ? commitsLeftToday(item.plan) : 0}
                     />
                   </Pressable>
                 </Link>
                 <View style={styles.actions}>
-                  <Pressable
-                    style={styles.quickBtn}
-                    onPress={() => onQuickCommit(item)}
-                    disabled={quickId === item.id}
-                  >
-                    {quickId === item.id ? (
-                      <ActivityIndicator color="#fff" size="small" />
-                    ) : (
-                      <Text style={styles.quickBtnText}>+1 now</Text>
-                    )}
+                  <Pressable style={styles.quickBtn} onPress={() => onQuickCommit(item)}>
+                    <Text style={styles.quickBtnText}>+1 now</Text>
                   </Pressable>
                   <Pressable style={styles.deleteBtn} onPress={() => onDelete(item)}>
                     <Text style={styles.deleteBtnText}>Delete</Text>
