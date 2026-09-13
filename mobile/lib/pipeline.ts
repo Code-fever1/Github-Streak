@@ -39,6 +39,8 @@ export function clearPipeline(projectId: string): void {
 }
 
 export function initPipeline(project: Project, queued: number): void {
+  const existing = live.get(project.id);
+  if (existing) return;
   live.set(project.id, {
     projectId: project.id,
     projectName: project.name,
@@ -96,6 +98,17 @@ export function finishPush(projectId: string): void {
   const row = live.get(projectId);
   if (!row) return;
   live.set(projectId, { ...row, pushing: 0 });
+  notify();
+}
+
+export function abortPush(projectId: string): void {
+  const row = live.get(projectId);
+  if (!row) return;
+  live.set(projectId, {
+    ...row,
+    pushing: 0,
+    waitingPush: row.waitingPush + (row.pushing > 0 ? 1 : 0),
+  });
   notify();
 }
 

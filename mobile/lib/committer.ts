@@ -88,11 +88,9 @@ export interface PipelineHooks {
   onWriteDone?: () => void;
   onPushStart?: () => void;
   onPushDone?: (message: string) => Promise<void> | void;
-  onRebuild?: () => void;
+  onPushError?: () => void;
   shouldStop?: () => boolean;
 }
-
-const TARGET_BUFFER = 10;
 
 async function loadTree(git: CommitSession): Promise<TreeState> {
   const files = await readFilesFromTree(git, ['COUNTER.md', 'NOTES.md', 'CHANGELOG.md']);
@@ -136,9 +134,24 @@ async function createPrepared(git: CommitSession, tree: TreeState): Promise<{ pr
   return { prepared, tree: { counter: next, notes, changelog } };
 }
 
+class Wake {
+  private waiters: Array<() => void> = [];
+
+  wait(): Promise<void> {
+    return new Promise((resolve) => this.waiters.push(resolve));
+  }
+
+  wake(): void {
+    const pending = this.waiters.splice(0);
+    pending.forEach((fn) => fn());
+  }
+}
+
 /**
- * Fill a stack of commit objects (up to 10), then push them one unique PATCH at a time.
- * Writing keeps going while a push is in flight so Committed can sit at +10 with Queue still holding the rest.
+ * Two workers for one repo:
+ * - writer: keeps creating commit objects into a buffer
+ * - pusher: takes the oldest unique SHA and PATCHes, one at a time
+ * They never wait on each other except backpressure (buffer full / empty).
  */
 export async function pushCommitsPipelined(
   project: Project,
@@ -153,85 +166,103 @@ export async function pushCommitsPipelined(
 
   let git = await startCommitSession(project);
   let tree = await loadTree(git);
-  const ready: PreparedCommit[] = [];
-  let createP: Promise<void> | null = null;
-  let pushP: Promise<void> | null = null;
+  let ready: PreparedCommit[] = [];
   let made = 0;
   let ffTries = 0;
   let lastPushOk = false;
+  let redoWithoutReserve = 0;
+  let stopWorkers = false;
+  let writerDone = false;
   const messages: string[] = [];
+  const wake = new Wake();
 
-  const rebuild = async () => {
-    if (createP) await createP.catch(() => {});
-    createP = null;
-    if (pushP) await pushP.catch(() => {});
-    pushP = null;
-    ready.length = 0;
+  const stopped = () => stopWorkers || Boolean(hooks.shouldStop?.());
+
+  const rebuildGit = async () => {
+    redoWithoutReserve = ready.length;
+    ready = [];
     lastPushOk = false;
     git = await startCommitSession(project);
     tree = await loadTree(git);
-    hooks.onRebuild?.();
   };
 
-  const canWrite = () => !createP && ready.length < MAX_AHEAD && (hooks.beginWrite ? hooks.beginWrite() : false);
+  const runWriter = async () => {
+    try {
+      while (!stopped()) {
+        while (ready.length >= MAX_AHEAD && !stopped()) await wake.wait();
+        if (stopped()) break;
 
-  while (!hooks.shouldStop?.()) {
-    if (canWrite()) {
-      createP = (async () => {
-        try {
-          const created = await createPrepared(git, tree);
-          tree = created.tree;
-          ready.push(created.prepared);
-          hooks.onWriteDone?.();
-        } catch (err) {
-          hooks.onRebuild?.();
-          throw err;
+        let reserved = false;
+        if (redoWithoutReserve > 0) {
+          redoWithoutReserve -= 1;
+        } else if (hooks.beginWrite?.()) {
+          reserved = true;
+        } else if (ready.length === 0) {
+          break;
+        } else {
+          await wake.wait();
+          continue;
         }
-      })().finally(() => {
-        createP = null;
-      });
-    }
 
-    const filled = ready.length >= TARGET_BUFFER;
-    const writesIdle = !createP && ready.length > 0;
-    const mayPush = filled || writesIdle;
-    if (!pushP && ready.length > 0 && mayPush) {
+        const created = await createPrepared(git, tree);
+        if (stopped()) break;
+        tree = created.tree;
+        ready.push(created.prepared);
+        if (reserved) hooks.onWriteDone?.();
+        wake.wake();
+      }
+    } finally {
+      writerDone = true;
+      wake.wake();
+    }
+  };
+
+  const runPusher = async () => {
+    while (!stopped()) {
+      while (ready.length === 0 && !writerDone && !stopped()) await wake.wait();
+      if (ready.length === 0) break;
+
       const current = ready.shift()!;
       hooks.onPushStart?.();
-      const skipHeadCheck = lastPushOk;
-      pushP = (async () => {
-        try {
-          await pushCommit(git, current.sha, current.parentSha, { checkHead: !skipHeadCheck });
-          lastPushOk = true;
-          ffTries = 0;
-          made++;
-          messages.push(current.message);
-          await hooks.onPushDone?.(current.message);
-        } catch (err) {
-          lastPushOk = false;
-          ready.unshift(current);
-          throw err;
-        }
-      })().finally(() => {
-        pushP = null;
-      });
-    }
-
-    const inflight = [createP, pushP].filter((p): p is Promise<void> => Boolean(p));
-    if (inflight.length === 0) break;
-
-    try {
-      await Promise.race(inflight);
-    } catch (err) {
-      if (isFastForwardError(err) && ffTries < FF_RETRIES - 1) {
-        ffTries += 1;
-        await rebuild();
-        continue;
+      try {
+        await pushCommit(git, current.sha, current.parentSha, { checkHead: !lastPushOk });
+        lastPushOk = true;
+        ffTries = 0;
+        made++;
+        messages.push(current.message);
+        await hooks.onPushDone?.(current.message);
+        wake.wake();
+      } catch (err) {
+        lastPushOk = false;
+        ready.unshift(current);
+        hooks.onPushError?.();
+        throw err;
       }
-      if (createP) await createP.catch(() => {});
-      if (pushP) await pushP.catch(() => {});
-      throw err;
     }
+  };
+
+  while (!hooks.shouldStop?.()) {
+    stopWorkers = false;
+    writerDone = false;
+    let workerErr: unknown;
+    const writer = runWriter().catch((err) => {
+      workerErr = err;
+      stopWorkers = true;
+      wake.wake();
+    });
+    const pusher = runPusher().catch((err) => {
+      workerErr = err;
+      stopWorkers = true;
+      wake.wake();
+    });
+    await Promise.all([writer, pusher]);
+    if (!workerErr) break;
+    if (isFastForwardError(workerErr) && ffTries < FF_RETRIES - 1) {
+      ffTries += 1;
+      await rebuildGit();
+      continue;
+    }
+    throw workerErr;
   }
 
   return { made, messages };

@@ -1,7 +1,7 @@
 import { AppState, type AppStateStatus } from 'react-native';
 import { pushCommitsPipelined } from './committer';
 import { isFastForwardError } from './github';
-import { clearPipeline, initPipeline, beginWrite, finishWrite, beginPush, finishPush, rebuildPipeline, addQueued } from './pipeline';
+import { abortPush, addQueued, beginPush, beginWrite, clearPipeline, finishPush, finishWrite, initPipeline } from './pipeline';
 import { isOfflineError, isOnline } from './offline';
 import {
   appendLog,
@@ -182,6 +182,7 @@ async function drainProject(project: Project): Promise<void> {
       beginWrite: () => beginWrite(project.id),
       onWriteDone: () => finishWrite(project.id),
       onPushStart: () => beginPush(project.id),
+      onPushError: () => abortPush(project.id),
       onPushDone: async () => {
         finishPush(project.id);
         const dropped = await decrementProjectRemaining(project.id);
@@ -202,7 +203,6 @@ async function drainProject(project: Project): Promise<void> {
           manual: dropped?.manual,
         });
       },
-      onRebuild: () => rebuildPipeline(project.id),
     });
 
     if (planDirty > 0) {
@@ -227,7 +227,8 @@ async function drainProject(project: Project): Promise<void> {
     return;
   }
 
-  clearPipeline(project.id);
+  const left = await getProjectRemaining(project.id);
+  if (left <= 0) clearPipeline(project.id);
   await clearCheckpoint(project.id);
 }
 

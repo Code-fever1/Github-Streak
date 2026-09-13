@@ -15,7 +15,7 @@ const PHASE_ORDER: Phase[] = ['queued', 'committing', 'committed', 'failed'];
 const PHASE_COPY: Record<Phase, { title: string; hint: string; tone: 'work' | 'wait' | 'done' | 'fail' }> = {
   queued: { title: 'Queued', hint: 'Waiting to write', tone: 'wait' },
   committing: { title: 'Being committed', hint: 'Writing the next commit object', tone: 'work' },
-  committed: { title: 'Committed', hint: 'Saved. Pushing one at a time.', tone: 'done' },
+  committed: { title: 'Committed', hint: 'Pushing one at a time while more are written', tone: 'done' },
   failed: { title: 'Failed', hint: 'Same error grouped. Retry or delete.', tone: 'fail' },
 };
 
