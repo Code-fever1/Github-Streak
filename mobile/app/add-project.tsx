@@ -16,7 +16,7 @@ import { router } from 'expo-router';
 import { useProjects } from '@/context/ProjectsContext';
 import { parseRepoInput } from '@/lib/repo-url';
 
-const TOKEN_URL = 'https://github.com/settings/tokens/new?scopes=repo&description=Streak%20Keeper';
+const TOKEN_URL = 'https://github.com/settings/tokens/new?scopes=repo&description=Veyon';
 
 export default function AddProjectScreen() {
   const { addProject } = useProjects();

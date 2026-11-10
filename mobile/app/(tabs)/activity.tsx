@@ -1,7 +1,10 @@
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import { useCallback, useMemo } from 'react';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { CommitCalendar } from '@/components/CommitCalendar';
 import { useProjects } from '@/context/ProjectsContext';
+import { inPipelineCount } from '@/lib/pipeline-stats';
 import { isFastForwardError } from '@/lib/github';
 import { isOfflineError } from '@/lib/offline';
 import type { PipelineSnapshot } from '@/lib/pipeline';
@@ -128,20 +131,68 @@ function groupSent(logs: ActivityLog[]): SentGroup[] {
 }
 
 export default function ActivityScreen() {
-  const { logs, queue, pipeline, refresh, retryQueueJobs, deleteQueueJobs } = useProjects();
+  const insets = useSafeAreaInsets();
+  const {
+    logs,
+    queue,
+    pipeline,
+    pending,
+    refresh,
+    retryQueueJobs,
+    deleteQueueJobs,
+    githubDays,
+    githubHistoryLoading,
+    githubHistoryError,
+    refreshGithubHistory,
+  } = useProjects();
 
   useFocusEffect(
     useCallback(() => {
       refresh();
-    }, [refresh]),
+      refreshGithubHistory().catch(() => {});
+    }, [refresh, refreshGithubHistory]),
   );
+
+  const inFlight = useMemo(() => inPipelineCount(pipeline, pending), [pipeline, pending]);
+  const historyList = useMemo(() => [...githubDays].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 14), [githubDays]);
 
   const activeGroups = useMemo(() => groupsFromPipeline(pipeline), [pipeline]);
   const failedGroups = useMemo(() => groupsFromFailed(queue), [queue]);
   const sentGroups = useMemo(() => groupSent(logs), [logs]);
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.list}>
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={[styles.list, { paddingTop: insets.top + 12, paddingBottom: insets.bottom + 24 }]}
+    >
+      <View style={styles.githubPanel}>
+        <View style={styles.githubHeader}>
+          <Text style={styles.githubTitle}>GitHub commit history</Text>
+          <Pressable onPress={() => refreshGithubHistory(true)} hitSlop={8}>
+            <Text style={styles.refreshLink}>REFRESH</Text>
+          </Pressable>
+        </View>
+        <Text style={styles.githubSub}>
+          {inFlight > 0 ? `${inFlight} commit(s) still queued locally — not on GitHub until pushed.` : 'Live counts from your branch on GitHub.'}
+        </Text>
+        <CommitCalendar days={githubDays} loading={githubHistoryLoading} error={githubHistoryError} />
+        {historyList.length > 0 ? (
+          <View style={styles.dayList}>
+            {historyList.map((row) => (
+              <View key={row.date} style={styles.dayRow}>
+                <Text style={styles.dayDate}>{row.date}</Text>
+                <Text style={styles.dayTotal}>{row.total}</Text>
+                <Text style={styles.daySplit}>
+                  {row.app} app · {row.other} other
+                </Text>
+              </View>
+            ))}
+          </View>
+        ) : null}
+      </View>
+
+      <Text style={styles.pipelineHeading}>Live pipeline</Text>
+
       {PHASE_ORDER.map((phase) => {
         const groups = phase === 'failed' ? failedGroups : activeGroups.filter((g) => g.phase === phase);
         const copy = PHASE_COPY[phase];
@@ -234,7 +285,32 @@ function SentCard({ group }: { group: SentGroup }) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#0d1117' },
-  list: { padding: 16, paddingBottom: 40 },
+  list: { paddingHorizontal: 16 },
+  githubPanel: {
+    backgroundColor: '#161b22',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#30363d',
+    padding: 16,
+    marginBottom: 20,
+  },
+  githubHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
+  githubTitle: { color: '#f0f6fc', fontSize: 16, fontWeight: '700' },
+  refreshLink: { color: '#58a6ff', fontSize: 11, fontWeight: '800', letterSpacing: 0.5 },
+  githubSub: { color: '#8b949e', fontSize: 12, lineHeight: 17, marginBottom: 12 },
+  dayList: { marginTop: 16, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#30363d', paddingTop: 8 },
+  dayRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 8, gap: 10 },
+  dayDate: { color: '#e6edf3', fontWeight: '600', width: 100, fontSize: 13 },
+  dayTotal: { color: '#3fb950', fontWeight: '800', width: 32, fontSize: 15, fontVariant: ['tabular-nums'] },
+  daySplit: { color: '#8b949e', flex: 1, fontSize: 12 },
+  pipelineHeading: {
+    color: '#8b949e',
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+    marginBottom: 8,
+  },
   sectionBlock: { marginBottom: 4 },
   section: {
     color: '#8b949e',

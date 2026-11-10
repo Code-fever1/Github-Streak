@@ -16,6 +16,7 @@ import {
   loadLogs,
   loadProjects,
   loadQueue,
+  hasGithubToken,
   saveGithubToken,
   saveProjects,
   saveSshKey,
@@ -24,6 +25,12 @@ import {
   type QueuedJob,
 } from '@/lib/storage';
 import { verifyGithubToken } from '@/lib/github';
+import {
+  fetchBranchCommitDays,
+  historySinceDays,
+  mergeCommitDays,
+  type DayCommitStats,
+} from '@/lib/github-commits';
 
 interface ProjectsContextValue {
   projects: Project[];
@@ -40,11 +47,17 @@ interface ProjectsContextValue {
   updateTimer: (id: string, timer: TimerConfig) => Promise<void>;
   getPlan: (project: Project) => Promise<DailyPlan>;
   runTick: (project: Project, force?: boolean) => Promise<ActivityLog>;
-  quickCommit: (project: Project) => Promise<ActivityLog>;
+  quickCommit: (project: Project, count?: number) => Promise<ActivityLog>;
   retryQueueJobs: (jobIds: string[]) => Promise<void>;
   deleteQueueJobs: (jobIds: string[]) => Promise<void>;
   refresh: () => Promise<void>;
+  githubDays: DayCommitStats[];
+  githubHistoryLoading: boolean;
+  githubHistoryError: string | null;
+  refreshGithubHistory: (force?: boolean) => Promise<void>;
 }
+
+const GITHUB_HISTORY_WEEKS = 12;
 
 function queuedUnits(jobs: QueuedJob[]): number {
   return jobs.filter((job) => !job.lastError).reduce((sum, job) => sum + job.n, 0);
@@ -71,7 +84,11 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
   const [lastTicks, setLastTicks] = useState<Record<string, string | null>>({});
   const [pending, setPending] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [githubDays, setGithubDays] = useState<DayCommitStats[]>([]);
+  const [githubHistoryLoading, setGithubHistoryLoading] = useState(false);
+  const [githubHistoryError, setGithubHistoryError] = useState<string | null>(null);
   const queueRef = useRef<QueuedJob[]>([]);
+  const githubFetchAt = useRef(0);
 
   const refresh = useCallback(async () => {
     const p = await loadProjects();
@@ -188,12 +205,47 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
     return log;
   }, [refresh]);
 
-  const quickCommit = useCallback(async (project: Project) => {
-    const log = await runQuickCommit(project);
+  const refreshGithubHistory = useCallback(async (force = false) => {
+    const now = Date.now();
+    if (!force && now - githubFetchAt.current < 15_000) return;
+    githubFetchAt.current = now;
+    setGithubHistoryLoading(true);
+    setGithubHistoryError(null);
+    try {
+      const since = historySinceDays(GITHUB_HISTORY_WEEKS * 7);
+      const rows: DayCommitStats[][] = [];
+      let lastErr: string | null = null;
+      for (const project of projects) {
+        if (!(await hasGithubToken(project.id))) continue;
+        try {
+          rows.push(await fetchBranchCommitDays(project, since));
+        } catch (err) {
+          lastErr = err instanceof Error ? err.message : String(err);
+        }
+      }
+      if (rows.length === 0 && lastErr) setGithubHistoryError(lastErr);
+      else setGithubHistoryError(null);
+      setGithubDays(mergeCommitDays(rows));
+    } catch (err) {
+      setGithubHistoryError(err instanceof Error ? err.message : String(err));
+      setGithubDays([]);
+    } finally {
+      setGithubHistoryLoading(false);
+    }
+  }, [projects]);
+
+  const quickCommit = useCallback(async (project: Project, count = 1) => {
+    const log = await runQuickCommit(project, count);
     await refresh();
-    flushQueue().then(() => refresh()).catch(() => {});
+    flushQueue()
+      .then(() => {
+        refresh().catch(() => {});
+        githubFetchAt.current = 0;
+        refreshGithubHistory().catch(() => {});
+      })
+      .catch(() => {});
     return log;
-  }, [refresh]);
+  }, [refresh, refreshGithubHistory]);
 
   const retryQueueJobs = useCallback(async (jobIds: string[]) => {
     await clearQueueJobErrors(jobIds);
@@ -206,6 +258,12 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
     await dropQueueJobs(jobIds);
     await refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    if (!loading && projects.length > 0) {
+      refreshGithubHistory().catch(() => {});
+    }
+  }, [loading, projects.length, refreshGithubHistory]);
 
   const value = useMemo(
     () => ({
@@ -227,6 +285,10 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
       retryQueueJobs,
       deleteQueueJobs,
       refresh,
+      githubDays,
+      githubHistoryLoading,
+      githubHistoryError,
+      refreshGithubHistory,
     }),
     [
       projects,
@@ -247,6 +309,10 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
       retryQueueJobs,
       deleteQueueJobs,
       refresh,
+      githubDays,
+      githubHistoryLoading,
+      githubHistoryError,
+      refreshGithubHistory,
     ],
   );
 

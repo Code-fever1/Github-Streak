@@ -43,15 +43,17 @@ Github-Streak/
 
 ---
 
-## :iphone: Mobile app
+## :iphone: Veyon (mobile app)
 
-Runs on the phone. Paste a GitHub repo, add the SSH key, done. Offline commits wait in a queue.
+**Veyon** is the on-phone companion: dashboard UI, commit pipeline, GitHub day-by-day history, timers, and optional **Fiverr notification alerts** on Android.
 
 ```bash
 cd mobile && npm start
 ```
 
-See [`mobile/README.md`](./mobile/README.md).
+Pre-built Android APK: see [**Releases**](https://github.com/Code-fever1/Github-Streak/releases) (tag **v2** — arm64).
+
+Details: [`mobile/README.md`](./mobile/README.md).
 
 ---
 

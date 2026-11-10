@@ -155,7 +155,7 @@ export default function ProjectDetailScreen() {
             autoCorrect={false}
             secureTextEntry
           />
-          <Pressable onPress={() => WebBrowser.openBrowserAsync('https://github.com/settings/tokens/new?scopes=repo&description=Streak%20Keeper')}>
+          <Pressable onPress={() => WebBrowser.openBrowserAsync('https://github.com/settings/tokens/new?scopes=repo&description=Veyon')}>
             <Text style={styles.link}>Create a classic token (repo scope)</Text>
           </Pressable>
           <Pressable style={styles.secondary} onPress={onSaveToken} disabled={savingToken}>

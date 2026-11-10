@@ -50,6 +50,14 @@ export default function RootLayout() {
               <Stack>
                 <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
                 <Stack.Screen
+                  name="settings"
+                  options={{
+                    title: 'Settings',
+                    headerStyle: { backgroundColor: '#161b22' },
+                    headerTintColor: '#e6edf3',
+                  }}
+                />
+                <Stack.Screen
                   name="add-project"
                   options={{
                     title: 'Add repo',

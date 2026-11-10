@@ -10,25 +10,30 @@ export default function TabLayout() {
     <Tabs
       screenOptions={{
         tabBarActiveTintColor: '#3fb950',
-        tabBarInactiveTintColor: '#8b949e',
-        tabBarStyle: { backgroundColor: '#161b22', borderTopColor: '#30363d' },
-        headerStyle: { backgroundColor: '#161b22' },
-        headerTintColor: '#e6edf3',
+        tabBarInactiveTintColor: '#6e7681',
+        tabBarStyle: {
+          backgroundColor: '#0d1117',
+          borderTopColor: '#21262d',
+          height: 64,
+          paddingTop: 6,
+        },
+        tabBarLabelStyle: { fontSize: 11, fontWeight: '600' },
+        headerShown: false,
         sceneStyle: { backgroundColor: '#0d1117' },
       }}
     >
       <Tabs.Screen
         name="index"
         options={{
-          title: 'Projects',
-          tabBarIcon: ({ color }) => <TabIcon label="📁" color={color} />,
+          title: 'Home',
+          tabBarIcon: ({ color }) => <TabIcon label="⌂" color={color} />,
         }}
       />
       <Tabs.Screen
         name="activity"
         options={{
-          title: 'Activity',
-          tabBarIcon: ({ color }) => <TabIcon label="⏱" color={color} />,
+          title: 'Pipeline',
+          tabBarIcon: ({ color }) => <TabIcon label="◎" color={color} />,
         }}
       />
     </Tabs>

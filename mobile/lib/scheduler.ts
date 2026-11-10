@@ -2,6 +2,7 @@ import { AppState, type AppStateStatus } from 'react-native';
 import { pushCommitsPipelined } from './committer';
 import { isFastForwardError } from './github';
 import { abortPush, addQueued, beginPush, beginWrite, clearPipeline, finishPush, finishWrite, initPipeline } from './pipeline';
+import { markCommittedToday, publishSendStatus, startKeeperService } from './device-notify';
 import { isOfflineError, isOnline } from './offline';
 import {
   appendLog,
@@ -36,7 +37,9 @@ const OFFLINE_BACKOFF_MS = 8000;
 const flushWaiters: Array<{ resolve: () => void; reject: (err: unknown) => void }> = [];
 
 export function isFlushPaused(): boolean {
-  return appPaused || AppState.currentState !== 'active';
+  // Keep draining while the UI is backgrounded/closed. The Android keeper
+  // service holds the process; pausing here is what stopped hourly sends.
+  return false;
 }
 
 export function pauseFlush(): void {
@@ -178,13 +181,14 @@ async function drainProject(project: Project): Promise<void> {
 
   try {
     await pushCommitsPipelined(project, {
-      shouldStop: () => isFlushPaused() && AppState.currentState !== 'active',
+        shouldStop: () => false,
       beginWrite: () => beginWrite(project.id),
       onWriteDone: () => finishWrite(project.id),
       onPushStart: () => beginPush(project.id),
       onPushError: () => abortPush(project.id),
       onPushDone: async () => {
         finishPush(project.id);
+        markCommittedToday();
         const dropped = await decrementProjectRemaining(project.id);
         planDirty += 1;
         if (planDirty >= 3) {
@@ -233,6 +237,8 @@ async function drainProject(project: Project): Promise<void> {
 }
 
 export async function queueCommits(project: Project, n: number, manual: boolean): Promise<ActivityLog> {
+  startKeeperService();
+  publishSendStatus('Starting send');
   const job = await enqueue({ projectId: project.id, projectName: project.name, n, manual });
   addQueued(project.id, n, project.name);
   const now = new Date();
@@ -240,7 +246,7 @@ export async function queueCommits(project: Project, n: number, manual: boolean)
     id: job.id,
     projectId: project.id,
     projectName: project.name,
-    message: manual ? 'Queued +1' : `Queued ${n} commit(s)`,
+    message: manual ? `Queued +${n}` : `Queued ${n} commit(s)`,
     commits: n,
     timestamp: now.toISOString(),
     success: true,
@@ -284,7 +290,8 @@ export async function runScheduledTick(project: Project, force = false): Promise
   return result;
 }
 
-export async function runQuickCommit(project: Project): Promise<ActivityLog> {
+export async function runQuickCommit(project: Project, count = 1): Promise<ActivityLog> {
+  const n = Math.max(1, Math.floor(count));
   if (!project.enabled) {
     return {
       id: `${project.id}-${Date.now()}`,
@@ -298,7 +305,7 @@ export async function runQuickCommit(project: Project): Promise<ActivityLog> {
       error: 'Enable the project first',
     };
   }
-  return queueCommits(project, 1, true);
+  return queueCommits(project, n, true);
 }
 
 AppState.addEventListener('change', (state) => {
