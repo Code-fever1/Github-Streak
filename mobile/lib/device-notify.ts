@@ -1,10 +1,14 @@
 import { NativeModules, Platform } from 'react-native';
 import { listPipelines } from './pipeline';
+import { msUntilNextGlobalTick } from './planner';
+import { loadAllLastTicks, loadProjects, loadQueue } from './storage';
 
 function native() {
   return NativeModules.StreakKeeperNative as
     | {
         startService?: () => void;
+        stopService?: (exitIfBackground: boolean) => void;
+        scheduleNextWake?: (triggerAtMs: number) => void;
         updateStatus?: (status: string) => void;
         markCommittedToday?: () => void;
         scheduleReminders?: () => void;
@@ -45,4 +49,37 @@ export function scheduleDayReminders(): void {
 export function startKeeperService(): void {
   if (Platform.OS !== 'android') return;
   native()?.startService?.();
+}
+
+export function stopKeeperService(exitIfBackground = false): void {
+  if (Platform.OS !== 'android') return;
+  native()?.stopService?.(exitIfBackground);
+}
+
+export function scheduleNextWake(triggerAtMs: number): void {
+  if (Platform.OS !== 'android') return;
+  native()?.scheduleNextWake?.(triggerAtMs);
+}
+
+/** Schedule an exact Android wake-up alarm for the next pending queue retry or scheduled commit slot. */
+export async function syncNextWakeAlarm(): Promise<void> {
+  if (Platform.OS !== 'android') return;
+  try {
+    const [projects, queue] = await Promise.all([loadProjects(), loadQueue()]);
+    const hasPending = queue.some((j) => !j.lastError && j.n > 0);
+    if (hasPending) {
+      scheduleNextWake(Date.now() + 5 * 60_000);
+      return;
+    }
+    const enabled = projects.filter((p) => p.enabled);
+    if (enabled.length === 0) {
+      scheduleNextWake(0);
+      return;
+    }
+    const lastTicks = await loadAllLastTicks(enabled);
+    const ms = msUntilNextGlobalTick(enabled, lastTicks, new Date());
+    scheduleNextWake(Date.now() + Math.max(30_000, ms));
+  } catch {
+    // Ignore wake-sync errors so foreground actions stay non-blocking.
+  }
 }

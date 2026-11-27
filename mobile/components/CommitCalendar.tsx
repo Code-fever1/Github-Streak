@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 
+import { THEME } from '@/constants/theme';
 import type { DayCommitStats } from '@/lib/github-commits';
 
 const WEEKS = 12;
@@ -15,8 +16,8 @@ function level(total: number): number {
   return 4;
 }
 
-const LEVEL_APP = ['#161b22', '#0e4429', '#006d32', '#26a641', '#39d353'];
-const LEVEL_OTHER = ['#161b22', '#3d2c0a', '#6b4a0a', '#b08800', '#f0b429'];
+const LEVEL_APP = [THEME.surfaceElevated, '#0E4429', '#006D32', '#26A641', THEME.accent];
+const LEVEL_OTHER = [THEME.surfaceElevated, '#3D2C0A', '#6B4A0A', '#B08800', THEME.warn];
 
 interface Props {
   days: DayCommitStats[];
@@ -42,11 +43,11 @@ export function CommitCalendar({ days, loading, error }: Props) {
       grid.push({ key, stats: byDate.get(key) });
       cursor.setDate(cursor.getDate() + 1);
     }
-  return grid;
+    return grid;
   }, [byDate]);
 
   const weekCols = useMemo(() => {
-    const cols: typeof cells[] = [];
+    const cols: (typeof cells)[] = [];
     let col: typeof cells = [];
     for (let i = 0; i < cells.length; i++) {
       const dow = localDayOfWeek(cells[i].key);
@@ -112,17 +113,21 @@ export function CommitCalendar({ days, loading, error }: Props) {
       </ScrollView>
 
       <View style={styles.legend}>
-        <Text style={styles.legendLabel}>App commits</Text>
-        <View style={styles.legendCells}>
-          {LEVEL_APP.map((c, i) => (
-            <View key={`a-${i}`} style={[styles.legendCell, { backgroundColor: c }]} />
-          ))}
+        <View style={styles.legendGroup}>
+          <Text style={styles.legendLabel}>App</Text>
+          <View style={styles.legendCells}>
+            {LEVEL_APP.map((c, i) => (
+              <View key={`a-${i}`} style={[styles.legendCell, { backgroundColor: c }]} />
+            ))}
+          </View>
         </View>
-        <Text style={styles.legendLabel}>Other (manual / web)</Text>
-        <View style={styles.legendCells}>
-          {LEVEL_OTHER.map((c, i) => (
-            <View key={`o-${i}`} style={[styles.legendCell, { backgroundColor: c }]} />
-          ))}
+        <View style={styles.legendGroup}>
+          <Text style={styles.legendLabel}>Other</Text>
+          <View style={styles.legendCells}>
+            {LEVEL_OTHER.map((c, i) => (
+              <View key={`o-${i}`} style={[styles.legendCell, { backgroundColor: c }]} />
+            ))}
+          </View>
         </View>
       </View>
       <Text style={styles.caption}>Counts match commits on your branch author dates from the GitHub API.</Text>
@@ -145,19 +150,36 @@ function formatToday(): string {
 }
 
 const styles = StyleSheet.create({
-  summaryRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 12 },
-  summaryTitle: { color: '#e6edf3', fontWeight: '700', fontSize: 14 },
-  summaryValue: { color: '#3fb950', fontWeight: '800', fontSize: 16 },
-  summarySub: { color: '#8b949e', fontWeight: '600', fontSize: 12 },
-  summaryMuted: { color: '#8b949e', fontSize: 13 },
+  summaryRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'baseline',
+    marginBottom: THEME.space.md,
+  },
+  summaryTitle: { color: THEME.textPrimary, fontWeight: '600', fontSize: 13 },
+  summaryValue: {
+    color: THEME.accent,
+    fontWeight: '700',
+    fontSize: 16,
+    fontVariant: ['tabular-nums'],
+  },
+  summarySub: { color: THEME.textSecondary, fontWeight: '500', fontSize: 12 },
+  summaryMuted: { color: THEME.textSecondary, fontSize: 13 },
   gridRow: { flexDirection: 'row', gap: GAP },
   weekCol: { gap: GAP },
   cell: { width: CELL, height: CELL, borderRadius: 3 },
-  cellEmpty: { backgroundColor: '#161b22' },
-  legend: { marginTop: 14, gap: 6 },
-  legendLabel: { color: '#8b949e', fontSize: 11, fontWeight: '600' },
-  legendCells: { flexDirection: 'row', gap: 3, marginBottom: 4 },
+  cellEmpty: { backgroundColor: THEME.surfaceElevated },
+  legend: {
+    marginTop: THEME.space.md,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: THEME.space.lg,
+    alignItems: 'center',
+  },
+  legendGroup: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  legendLabel: { color: THEME.textMuted, fontSize: 11, fontWeight: '600' },
+  legendCells: { flexDirection: 'row', gap: 3 },
   legendCell: { width: 10, height: 10, borderRadius: 2 },
-  caption: { color: '#6e7681', fontSize: 11, marginTop: 8, lineHeight: 15 },
-  error: { color: '#f85149', fontSize: 13, lineHeight: 18 },
+  caption: { color: THEME.textMuted, fontSize: 11, marginTop: THEME.space.sm, lineHeight: 15 },
+  error: { color: THEME.danger, fontSize: 13, lineHeight: 18 },
 });

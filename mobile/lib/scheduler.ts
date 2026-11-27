@@ -2,7 +2,13 @@ import { AppState, type AppStateStatus } from 'react-native';
 import { pushCommitsPipelined } from './committer';
 import { isFastForwardError } from './github';
 import { abortPush, addQueued, beginPush, beginWrite, clearPipeline, finishPush, finishWrite, initPipeline } from './pipeline';
-import { markCommittedToday, publishSendStatus, startKeeperService } from './device-notify';
+import {
+  markCommittedToday,
+  publishSendStatus,
+  startKeeperService,
+  stopKeeperService,
+  syncNextWakeAlarm,
+} from './device-notify';
 import { isOfflineError, isOnline } from './offline';
 import {
   appendLog,
@@ -123,6 +129,17 @@ function startDrainAll(): Promise<void> {
       } while (redrain);
     } finally {
       drainAll = null;
+      loadQueue()
+        .then((jobs) => {
+          const activeLeft = jobs.some((j) => !j.lastError && j.n > 0);
+          if (!activeLeft) {
+            stopKeeperService(AppState.currentState !== 'active');
+          }
+        })
+        .catch(() => {})
+        .finally(() => {
+          syncNextWakeAlarm().catch(() => {});
+        });
     }
   })();
   return drainAll;
@@ -317,14 +334,17 @@ AppState.addEventListener('change', (state) => {
   }
 });
 
-export async function runDueTicks(): Promise<void> {
+export async function runDueTicks(): Promise<boolean> {
   const projects = await loadProjects();
+  let ran = false;
   for (const project of projects.filter((p) => p.enabled)) {
     const lastTickAt = await getLastTickAt(project.id);
     const lastFixedSlot = await getLastFixedSlot(project.id);
     if (shouldRunTick(project, lastTickAt, new Date(), lastFixedSlot)) {
+      ran = true;
       await runScheduledTick(project, false);
     }
   }
   await flushQueue();
+  return ran;
 }

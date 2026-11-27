@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
@@ -10,23 +11,33 @@ import {
 import { Link, router, useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { DashboardStatCard } from '@/components/DashboardStatCard';
+import { AppIcon } from '@/components/AppIcon';
+import { DashboardModulesGrid } from '@/components/DashboardModulesGrid';
+import { RamUsageBar } from '@/components/RamUsageBar';
 import { StreakCard } from '@/components/StreakCard';
+import { StreakHeroCard } from '@/components/StreakHeroCard';
+import { LAYOUT, THEME } from '@/constants/theme';
 import { useProjects } from '@/context/ProjectsContext';
 import { useClock } from '@/hooks/useClock';
-import { confirmAction } from '@/lib/confirm';
 import { isFastForwardError } from '@/lib/github';
+import { computeStreakSummary } from '@/lib/github-commits';
 import { isOfflineError } from '@/lib/offline';
-import { commitsLeftToday, commitsMadeToday } from '@/lib/planner';
-import { commitsOnDay, todayKeyLocal } from '@/lib/github-commits';
 import { inPipelineCount } from '@/lib/pipeline-stats';
+import { commitsLeftToday, commitsMadeToday } from '@/lib/planner';
 import { dayGreeting, timeAgo } from '@/lib/time-ago';
 import type { ActivityLog, DailyPlan, Project } from '@/lib/types';
 
 type ProjectRow = Project & { plan?: DailyPlan };
 
+const WEEKDAYS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'] as const;
+const MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'] as const;
+
 function pad2(n: number): string {
   return String(n).padStart(2, '0');
+}
+
+function formatShortDate(d = new Date()): string {
+  return `${WEEKDAYS[d.getDay()]}, ${MONTHS[d.getMonth()]} ${d.getDate()}`;
 }
 
 export default function DashboardScreen() {
@@ -36,7 +47,7 @@ export default function DashboardScreen() {
     loading,
     getPlan,
     quickCommit,
-    removeProject,
+    refresh,
     lastTicks,
     pending,
     logs,
@@ -44,9 +55,13 @@ export default function DashboardScreen() {
     pipeline,
     githubDays,
     githubHistoryLoading,
+    githubHistoryError,
+    refreshGithubHistory,
   } = useProjects();
-  const { countdown } = useClock(projects, lastTicks);
+
   const [rows, setRows] = useState<ProjectRow[]>([]);
+  const [refreshing, setRefreshing] = useState(false);
+  const [modulesRefreshKey, setModulesRefreshKey] = useState(0);
 
   const loadPlans = useCallback(async () => {
     const enriched = await Promise.all(projects.map(async (p) => ({ ...p, plan: await getPlan(p) })));
@@ -63,52 +78,99 @@ export default function DashboardScreen() {
     loadPlans();
   }, [loadPlans, pending, logs]);
 
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await Promise.all([refresh(), loadPlans(), refreshGithubHistory(true).catch(() => {})]);
+      setModulesRefreshKey((k) => k + 1);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [refresh, loadPlans, refreshGithubHistory]);
+
+  const streakSummary = useMemo(() => computeStreakSummary(githubDays), [githubDays]);
+
+  const planTotals = useMemo(() => {
+    let plannedMade = 0;
+    let plannedTarget = 0;
+    let plannedLeft = 0;
+    for (const row of rows) {
+      if (!row.enabled || !row.plan) continue;
+      plannedMade += commitsMadeToday(row.plan);
+      plannedTarget += row.plan.target;
+      plannedLeft += commitsLeftToday(row.plan);
+    }
+    return { plannedMade, plannedTarget, plannedLeft };
+  }, [rows]);
+
+  const pipelineBreakdown = useMemo(() => {
+    let writing = 0;
+    let pushing = 0;
+    let queued = 0;
+    const queuedByProject = new Map<string, number>();
+
+    for (const row of pipeline) {
+      const rowPush = row.waitingPush + row.pushing;
+      writing += row.writing;
+      pushing += rowPush;
+      queued += row.queued;
+      const rowTotal = row.queued + row.writing + rowPush;
+      if (rowTotal > 0) queuedByProject.set(row.projectId, rowTotal);
+    }
+
+    if (queuedByProject.size === 0 && pending > 0) {
+      for (const job of queue) {
+        if (job.lastError || job.n <= 0) continue;
+        queuedByProject.set(job.projectId, (queuedByProject.get(job.projectId) ?? 0) + job.n);
+      }
+    }
+
+    const failedByProject = new Map<string, number>();
+    let failedTotal = 0;
+    for (const job of queue) {
+      if (!job.lastError || isOfflineError(job.lastError) || isFastForwardError(job.lastError)) continue;
+      failedTotal += job.n;
+      failedByProject.set(job.projectId, (failedByProject.get(job.projectId) ?? 0) + job.n);
+    }
+
+    return { writing, pushing, queued, queuedByProject, failedByProject, failedTotal };
+  }, [pipeline, queue, pending]);
+
   const stats = useMemo(() => {
     const active = projects.filter((p) => p.enabled).length;
     const inPipeline = inPipelineCount(pipeline, pending);
-    const failed = queue
-      .filter((j) => j.lastError && !isOfflineError(j.lastError) && !isFastForwardError(j.lastError))
-      .reduce((sum, j) => sum + j.n, 0);
-    const todayGithub = commitsOnDay(githubDays, todayKeyLocal());
-    const window = logs.slice(0, 80);
+    const failed = pipelineBreakdown.failedTotal;
+    const windowLogs = logs.slice(0, 80);
     const successPct =
-      window.length === 0 ? 100 : Math.round((window.filter((l) => l.success).length / window.length) * 100);
-    return {
-      active,
-      inPipeline,
-      failed,
-      successPct,
-      githubToday: todayGithub?.total ?? 0,
-    };
-  }, [projects, pending, pipeline, queue, logs, githubDays]);
+      windowLogs.length === 0
+        ? 100
+        : Math.round((windowLogs.filter((l) => l.success).length / windowLogs.length) * 100);
+    return { active, inPipeline, failed, successPct };
+  }, [projects, pipeline, pending, pipelineBreakdown.failedTotal, logs]);
 
   const pipelineBusy = useMemo(
-    () => pipeline.some((row) => row.writing > 0 || row.waitingPush > 0 || row.pushing > 0) || pending > 0,
-    [pipeline, pending],
+    () =>
+      pipelineBreakdown.writing > 0 ||
+      pipelineBreakdown.pushing > 0 ||
+      pipelineBreakdown.queued > 0 ||
+      pending > 0,
+    [pipelineBreakdown, pending],
   );
 
-  const statusBadge = stats.failed > 0 ? 'Needs attention' : pipelineBusy ? 'Sending' : 'Operational';
-  const statusTone = stats.failed > 0 ? styles.badgeWarn : styles.badgeOk;
+  const statusPill = useMemo(() => {
+    if (stats.failed > 0) return { label: 'Attention', tone: 'warn' as const };
+    if (pipelineBusy) return { label: 'Sending', tone: 'work' as const };
+    return { label: 'Ready', tone: 'ok' as const };
+  }, [stats.failed, pipelineBusy]);
 
+  const shortDate = useMemo(() => formatShortDate(), []);
   const recent = logs.slice(0, 4);
 
-  const onQuickCommit = async (project: Project, count: number) => {
-    await quickCommit(project, count);
-  };
-
-  const onDelete = async (project: Project) => {
-    const ok = await confirmAction(
-      `Delete ${project.name}?`,
-      'Removes this repo from the app, its local SSH key, and any queued commits. GitHub is not changed.',
-    );
-    if (!ok) return;
-    await removeProject(project.id);
-  };
-
-  if (loading) {
+  if (loading && projects.length === 0 && logs.length === 0) {
     return (
       <View style={styles.center}>
-        <ActivityIndicator color="#3fb950" />
+        <ActivityIndicator color={THEME.accent} />
+        <Text style={styles.loadingHint}>Loading workspace…</Text>
       </View>
     );
   }
@@ -116,91 +178,191 @@ export default function DashboardScreen() {
   return (
     <ScrollView
       style={styles.container}
-      contentContainerStyle={[styles.content, { paddingTop: insets.top + 12, paddingBottom: insets.bottom + 96 }]}
+      contentContainerStyle={[
+        styles.scrollContent,
+        { paddingTop: insets.top + THEME.space.lg, paddingBottom: insets.bottom + 32 },
+      ]}
       showsVerticalScrollIndicator={false}
+      refreshControl={
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={onRefresh}
+          tintColor={THEME.accent}
+          colors={[THEME.accent]}
+          progressBackgroundColor={THEME.surface}
+        />
+      }
     >
-      <View style={styles.headerRow}>
-        <View style={styles.headerText}>
-          <Text style={styles.greeting}>
-            {dayGreeting()} <Text style={styles.wave}>👋</Text>
-          </Text>
-          <Text style={styles.subtitle}>Your personal command center</Text>
-        </View>
-        <Link href="/settings" asChild>
-          <Pressable style={({ pressed }) => [styles.gearBtn, pressed && styles.pressed]}>
-            <Text style={styles.gearIcon}>⚙</Text>
-          </Pressable>
-        </Link>
-      </View>
-
-      <View style={styles.statGrid}>
-        <DashboardStatCard tone="green" icon="⑂" value={pad2(stats.active)} label="Active projects" />
-        <DashboardStatCard tone="purple" icon="⟳" value={pad2(Math.min(stats.inPipeline, 99))} label="Queued locally" />
-        <DashboardStatCard tone="orange" icon="⚠" value={pad2(Math.min(stats.failed, 99))} label="Failed commits" />
-        <DashboardStatCard
-          tone="blue"
-          icon="◎"
-          value={githubHistoryLoading ? '…' : pad2(Math.min(stats.githubToday, 99))}
-          label="On GitHub today"
-        />
-      </View>
-
-      <View style={styles.panel}>
-        <View style={styles.panelHeader}>
-          <Text style={styles.panelTitle}>System status</Text>
-          <View style={[styles.statusPill, statusTone]}>
-            <Text style={[styles.statusPillText, stats.failed > 0 ? styles.statusWarnText : styles.statusOkText]}>
-              {statusBadge}
-            </Text>
+      <View style={styles.inner}>
+        <View style={styles.headerRow}>
+          <View style={styles.headerText}>
+            <Text style={styles.eyebrow}>VEYON · {shortDate}</Text>
+            <Text style={styles.greeting}>{dayGreeting()}</Text>
           </View>
-        </View>
-        <StatusRow label="GitHub scheduler" value={stats.active > 0 ? 'Running' : 'Idle'} ok={stats.active > 0} />
-        <Divider />
-        <StatusRow
-          label="Commit pipeline"
-          value={pipelineBusy ? 'Sending' : stats.inPipeline > 0 ? 'Queued' : 'Idle'}
-          ok={stats.failed === 0}
-        />
-        <Divider />
-        <StatusRow label="Next scheduled tick" value={countdown} ok highlight />
-        <Divider />
-        <StatusRow label="Daily reminders" value="12pm · 6pm · 11pm" ok muted />
-      </View>
-
-      <View style={styles.panel}>
-        <View style={styles.panelHeader}>
-          <Text style={styles.panelTitle}>Recent activity</Text>
-          <Pressable onPress={() => router.push('/(tabs)/activity')} hitSlop={8}>
-            <Text style={styles.viewAll}>VIEW ALL</Text>
+          <Pressable
+            onPress={() => router.push('/(tabs)/github')}
+            style={({ pressed }) => [
+              styles.statusPill,
+              statusPill.tone === 'warn'
+                ? styles.pillWarn
+                : statusPill.tone === 'work'
+                  ? styles.pillPurple
+                  : styles.pillOk,
+              pressed && styles.pressed,
+            ]}
+            accessibilityRole="button"
+            accessibilityLabel={`System status: ${statusPill.label}`}
+          >
+            <View
+              style={[
+                styles.statusDot,
+                {
+                  backgroundColor:
+                    statusPill.tone === 'warn'
+                      ? THEME.warn
+                      : statusPill.tone === 'work'
+                        ? THEME.purple
+                        : THEME.accent,
+                },
+              ]}
+            />
+            <Text
+              style={[
+                styles.statusPillText,
+                statusPill.tone === 'warn'
+                  ? styles.pillWarnText
+                  : statusPill.tone === 'work'
+                    ? styles.pillPurpleText
+                    : styles.pillOkText,
+              ]}
+            >
+              {statusPill.label}
+            </Text>
           </Pressable>
         </View>
-        {recent.length === 0 ? (
-          <Text style={styles.emptyActivity}>No commits yet today — add a repo to get started.</Text>
-        ) : (
-          recent.map((entry, i) => (
-            <View key={entry.id}>
-              {i > 0 ? <Divider /> : null}
-              <ActivityRow entry={entry} />
+
+        <StreakHeroCard
+          summary={streakSummary}
+          loading={githubHistoryLoading}
+          error={githubHistoryError}
+          plannedMade={planTotals.plannedMade}
+          plannedTarget={planTotals.plannedTarget}
+          plannedLeft={planTotals.plannedLeft}
+          hasProjects={projects.length > 0}
+          onOpenCalendar={() => router.push('/(tabs)/github')}
+          onRetryHistory={() => {
+            refreshGithubHistory(true).catch(() => {});
+          }}
+          footer={
+            <View style={styles.schedulerFooter}>
+              <View style={styles.schedulerLeft}>
+                <Text style={styles.schedulerLabel}>Scheduler</Text>
+                <View
+                  style={[
+                    styles.miniBadge,
+                    stats.active > 0 ? styles.pillOk : styles.pillMuted,
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.miniBadgeText,
+                      stats.active > 0 ? styles.pillOkText : styles.pillMutedText,
+                    ]}
+                  >
+                    {stats.active > 0 ? 'Running' : 'Idle'}
+                  </Text>
+                </View>
+              </View>
+              <View style={styles.tickRight}>
+                <Text style={styles.tickHint}>Next tick</Text>
+                <NextTick projects={projects} lastTicks={lastTicks} />
+              </View>
             </View>
-          ))
-        )}
-      </View>
+          }
+        />
 
-      <Text style={styles.sectionLabel}>Your repos</Text>
+        <DashboardModulesGrid
+          refreshKey={modulesRefreshKey}
+          onOpenCharge={() => router.push('/(tabs)/charge')}
+          onOpenNotifications={() => router.push('/(tabs)/notification')}
+        />
 
-      {projects.length === 0 ? (
-        <View style={styles.emptyRepos}>
-          <Text style={styles.emptyTitle}>No repo yet</Text>
-          <Text style={styles.emptyText}>Paste a GitHub link and a personal access token with repo access.</Text>
+        <RamUsageBar refreshKey={modulesRefreshKey} />
+
+        <View style={styles.metrics}>
+          <Metric value={`${stats.active}/${projects.length}`} label="Active" />
+          <MetricDivider />
+          <Metric
+            value={pad2(Math.min(stats.inPipeline, 99))}
+            label="Queued"
+            tone={stats.inPipeline > 0 ? 'purple' : 'default'}
+            onPress={() => router.push('/(tabs)/github')}
+          />
+          <MetricDivider />
+          <Metric
+            value={pad2(Math.min(stats.failed, 99))}
+            label="Failed"
+            tone={stats.failed > 0 ? 'warn' : 'default'}
+            onPress={() => router.push('/(tabs)/github')}
+          />
+          <MetricDivider />
+          <Metric
+            value={`${stats.successPct}%`}
+            label="Success"
+            tone={stats.successPct >= 90 ? 'ok' : 'warn'}
+          />
+        </View>
+
+        {stats.failed > 0 ? (
+          <Pressable
+            style={({ pressed }) => [styles.bannerWarn, pressed && styles.pressed]}
+            onPress={() => router.push('/(tabs)/github')}
+          >
+            <Text style={styles.bannerWarnText}>
+              {stats.failed} failed commit{stats.failed === 1 ? '' : 's'} — Open GitHub pipeline to retry
+            </Text>
+            <AppIcon name="chevron" color={THEME.danger} size={14} />
+          </Pressable>
+        ) : pipelineBusy ? (
+          <Pressable
+            style={({ pressed }) => [styles.bannerWork, pressed && styles.pressed]}
+            onPress={() => router.push('/(tabs)/github')}
+          >
+            <Text style={styles.bannerWorkText}>
+              Writing {pipelineBreakdown.writing} · Pushing {pipelineBreakdown.pushing} · Queued{' '}
+              {pipelineBreakdown.queued > 0 ? pipelineBreakdown.queued : pending}
+            </Text>
+            <AppIcon name="chevron" color={THEME.purple} size={14} />
+          </Pressable>
+        ) : null}
+
+        <View style={styles.sectionHeaderRow}>
+          <Text style={styles.sectionLabel}>REPOSITORIES ({projects.length})</Text>
           <Link href="/add-project" asChild>
-            <Pressable style={styles.cta}>
-              <Text style={styles.ctaText}>Add repo</Text>
+            <Pressable
+              style={({ pressed }) => [styles.addPill, pressed && styles.pressed]}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <AppIcon name="plus" color={THEME.accent} size={12} />
+              <Text style={styles.addPillText}>Add</Text>
             </Pressable>
           </Link>
         </View>
-      ) : (
-        <>
-          {rows.map((item) => (
+
+        {projects.length === 0 ? (
+          <View style={styles.emptyRepos}>
+            <Text style={styles.emptyTitle}>No repository connected</Text>
+            <Text style={styles.emptyText}>
+              Link a GitHub repository with a personal access token to start tracking daily commits.
+            </Text>
+            <Link href="/add-project" asChild>
+              <Pressable style={({ pressed }) => [styles.cta, pressed && styles.pressed]}>
+                <Text style={styles.ctaText}>Connect repository</Text>
+              </Pressable>
+            </Link>
+          </View>
+        ) : (
+          rows.map((item) => (
             <View key={item.id} style={styles.repoBlock}>
               <Link href={`/project/${item.id}`} asChild>
                 <Pressable style={({ pressed }) => pressed && styles.pressed}>
@@ -208,71 +370,120 @@ export default function DashboardScreen() {
                     project={item}
                     commitsToday={item.plan ? commitsMadeToday(item.plan) : 0}
                     commitsLeft={item.plan ? commitsLeftToday(item.plan) : 0}
+                    target={item.plan?.target}
+                    isQuiet={item.plan?.isQuiet}
+                    queuedCount={pipelineBreakdown.queuedByProject.get(item.id) ?? 0}
+                    failedCount={pipelineBreakdown.failedByProject.get(item.id) ?? 0}
                   />
                 </Pressable>
               </Link>
-              <View style={styles.actions}>
-                <View style={styles.quickSplit}>
-                  <Pressable style={styles.quickHalf} onPress={() => onQuickCommit(item, 1)}>
-                    <Text style={styles.quickBtnText}>+1</Text>
-                  </Pressable>
-                  <View style={styles.quickDivider} />
-                  <Pressable style={styles.quickHalf} onPress={() => onQuickCommit(item, 10)}>
-                    <Text style={styles.quickBtnText}>+10</Text>
-                  </Pressable>
-                </View>
-                <Pressable style={styles.deleteBtn} onPress={() => onDelete(item)}>
-                  <Text style={styles.deleteBtnText}>Delete</Text>
+              <View style={styles.quickBar}>
+                <Pressable
+                  style={({ pressed }) => [styles.quickBtn, pressed && styles.quickPressed]}
+                  onPress={() => quickCommit(item, 1)}
+                >
+                  <Text style={styles.quickBtnText}>+1 Commit</Text>
+                </Pressable>
+                <View style={styles.quickDivider} />
+                <Pressable
+                  style={({ pressed }) => [styles.quickBtn, pressed && styles.quickPressed]}
+                  onPress={() => quickCommit(item, 10)}
+                >
+                  <Text style={styles.quickBtnText}>+10 Batch</Text>
                 </Pressable>
               </View>
             </View>
-          ))}
-          <Link href="/add-project" asChild>
-            <Pressable style={styles.addRepoBtn}>
-              <Text style={styles.addRepoText}>+ Add another repo</Text>
-            </Pressable>
-          </Link>
-        </>
-      )}
+          ))
+        )}
+
+        <View style={styles.sectionHeaderRow}>
+          <Text style={styles.sectionLabel}>RECENT ACTIVITY</Text>
+          <Pressable
+            onPress={() => router.push('/(tabs)/github')}
+            style={({ pressed }) => [styles.viewAllRow, pressed && styles.pressed]}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            <Text style={styles.viewAll}>View all</Text>
+            <AppIcon name="chevron" color={THEME.info} size={13} />
+          </Pressable>
+        </View>
+
+        <View style={styles.panel}>
+          {recent.length === 0 ? (
+            <Text style={styles.emptyActivity}>
+              No commits logged yet — tap +1 Commit on a repository or wait for the next scheduled tick.
+            </Text>
+          ) : (
+            recent.map((entry, i) => (
+              <View key={entry.id}>
+                {i > 0 ? <View style={styles.divider} /> : null}
+                <ActivityRow entry={entry} />
+              </View>
+            ))
+          )}
+        </View>
+      </View>
     </ScrollView>
   );
 }
 
-function Divider() {
-  return <View style={styles.divider} />;
+const NextTick = memo(function NextTick({
+  projects,
+  lastTicks,
+}: {
+  projects: Project[];
+  lastTicks: Record<string, string | null>;
+}) {
+  const { countdown } = useClock(projects, lastTicks);
+  return <Text style={styles.tickValue}>{countdown}</Text>;
+});
+
+function Metric({
+  value,
+  label,
+  tone = 'default',
+  onPress,
+}: {
+  value: string;
+  label: string;
+  tone?: 'default' | 'ok' | 'warn' | 'purple';
+  onPress?: () => void;
+}) {
+  const valueStyle =
+    tone === 'ok'
+      ? styles.metricOk
+      : tone === 'warn'
+        ? styles.metricWarn
+        : tone === 'purple'
+          ? styles.metricPurple
+          : undefined;
+
+  const inner = (
+    <>
+      <Text style={[styles.metricValue, valueStyle]}>{value}</Text>
+      <Text style={styles.metricLabel}>{label}</Text>
+    </>
+  );
+
+  if (onPress) {
+    return (
+      <Pressable
+        style={({ pressed }) => [styles.metric, pressed && styles.pressed]}
+        onPress={onPress}
+        accessibilityRole="button"
+      >
+        {inner}
+      </Pressable>
+    );
+  }
+  return <View style={styles.metric}>{inner}</View>;
 }
 
-function StatusRow({
-  label,
-  value,
-  ok,
-  highlight,
-  muted,
-}: {
-  label: string;
-  value: string;
-  ok?: boolean;
-  highlight?: boolean;
-  muted?: boolean;
-}) {
-  const valueStyle = muted
-    ? styles.statusMuted
-    : highlight
-      ? styles.statusHighlight
-      : ok
-        ? styles.statusOk
-        : styles.statusIdle;
-  return (
-    <View style={styles.statusRow}>
-      <Text style={styles.statusLabel}>{label}</Text>
-      <Text style={valueStyle}>{value}</Text>
-    </View>
-  );
+function MetricDivider() {
+  return <View style={styles.metricDivider} />;
 }
 
 function ActivityRow({ entry }: { entry: ActivityLog }) {
-  const icon = entry.success ? '✓' : '⚠';
-  const iconWrap = entry.success ? styles.activityIconOk : styles.activityIconWarn;
   const title = entry.success
     ? entry.manual
       ? 'Manual commit sent'
@@ -280,13 +491,23 @@ function ActivityRow({ entry }: { entry: ActivityLog }) {
     : 'Send failed';
   return (
     <View style={styles.activityRow}>
-      <View style={[styles.activityIcon, iconWrap]}>
-        <Text style={styles.activityIconText}>{icon}</Text>
+      <View
+        style={[
+          styles.activityIcon,
+          entry.success ? styles.activityIconOk : styles.activityIconWarn,
+        ]}
+      >
+        <AppIcon
+          name={entry.success ? 'check' : 'alert'}
+          color={entry.success ? THEME.accent : THEME.warn}
+          size={15}
+        />
       </View>
       <View style={styles.activityBody}>
         <Text style={styles.activityTitle}>{title}</Text>
         <Text style={styles.activitySub} numberOfLines={1}>
-          {entry.projectName} · {entry.message || `${entry.commits} commit${entry.commits === 1 ? '' : 's'}`}
+          {entry.projectName} ·{' '}
+          {entry.message || `${entry.commits} commit${entry.commits === 1 ? '' : 's'}`}
         </Text>
       </View>
       <Text style={styles.activityTime}>{timeAgo(entry.timestamp)}</Text>
@@ -295,131 +516,223 @@ function ActivityRow({ entry }: { entry: ActivityLog }) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0d1117' },
-  content: { paddingHorizontal: 16 },
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#0d1117' },
-  headerRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 20 },
-  headerText: { flex: 1, paddingRight: 12 },
-  greeting: { color: '#f0f6fc', fontSize: 26, fontWeight: '800' },
-  wave: { fontSize: 24 },
-  subtitle: { color: '#8b949e', fontSize: 14, marginTop: 4 },
-  gearBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#161b22',
-    borderWidth: 1,
-    borderColor: '#30363d',
-    alignItems: 'center',
-    justifyContent: 'center',
+  container: { flex: 1, backgroundColor: THEME.bg },
+  scrollContent: { paddingHorizontal: THEME.space.lg },
+  inner: {
+    width: '100%',
+    maxWidth: LAYOUT.maxContentWidth,
+    alignSelf: 'center',
   },
-  gearIcon: { color: '#8b949e', fontSize: 22 },
-  statGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginBottom: 16 },
-  panel: {
-    backgroundColor: '#161b22',
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: '#30363d',
-    padding: 16,
-    marginBottom: 16,
-  },
-  panelHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 },
-  panelTitle: { color: '#f0f6fc', fontSize: 16, fontWeight: '700' },
-  statusPill: { borderRadius: 20, paddingHorizontal: 10, paddingVertical: 4 },
-  badgeOk: { backgroundColor: '#23863633' },
-  badgeWarn: { backgroundColor: '#d2992233' },
-  statusPillText: { fontSize: 11, fontWeight: '700' },
-  statusOkText: { color: '#3fb950' },
-  statusWarnText: { color: '#e3b341' },
-  statusRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 10 },
-  statusLabel: { color: '#c9d1d9', fontSize: 14 },
-  statusOk: { color: '#3fb950', fontWeight: '700', fontSize: 13 },
-  statusIdle: { color: '#8b949e', fontWeight: '600', fontSize: 13 },
-  statusHighlight: { color: '#58a6ff', fontWeight: '700', fontSize: 13, fontVariant: ['tabular-nums'] },
-  statusMuted: { color: '#6e7681', fontSize: 12, fontWeight: '600' },
-  divider: { height: StyleSheet.hairlineWidth, backgroundColor: '#30363d' },
-  viewAll: { color: '#58a6ff', fontSize: 11, fontWeight: '800', letterSpacing: 0.5 },
-  emptyActivity: { color: '#6e7681', fontSize: 13, lineHeight: 18 },
-  activityRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 10 },
-  activityIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  activityIconOk: { backgroundColor: '#23863633' },
-  activityIconWarn: { backgroundColor: '#d2992233' },
-  activityIconText: { fontSize: 16, fontWeight: '700', color: '#e6edf3' },
-  activityBody: { flex: 1 },
-  activityTitle: { color: '#e6edf3', fontWeight: '700', fontSize: 13 },
-  activitySub: { color: '#8b949e', fontSize: 12, marginTop: 2 },
-  activityTime: { color: '#6e7681', fontSize: 11 },
-  sectionLabel: {
-    color: '#8b949e',
-    fontSize: 12,
-    fontWeight: '800',
-    letterSpacing: 0.6,
-    textTransform: 'uppercase',
-    marginBottom: 12,
-    marginTop: 4,
-  },
-  repoBlock: { marginBottom: 4 },
-  pressed: { opacity: 0.88 },
-  actions: { flexDirection: 'row', gap: 8, marginTop: -4, marginBottom: 12 },
-  quickSplit: {
+  center: {
     flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: THEME.bg,
+  },
+  loadingHint: { color: THEME.textSecondary, marginTop: THEME.space.md, fontSize: 13 },
+  headerRow: {
     flexDirection: 'row',
-    backgroundColor: '#1f6feb',
-    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: THEME.space.lg,
+    gap: THEME.space.md,
+  },
+  headerText: { flex: 1 },
+  eyebrow: {
+    color: THEME.textMuted,
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.9,
+    marginBottom: 4,
+  },
+  greeting: { color: THEME.textPrimary, fontSize: 26, fontWeight: '700', letterSpacing: -0.4 },
+  statusPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderRadius: THEME.radius.pill,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    minHeight: 34,
+  },
+  statusDot: { width: 6, height: 6, borderRadius: 3 },
+  statusPillText: { fontSize: 12, fontWeight: '600' },
+  pillOk: { backgroundColor: THEME.accentSoft, borderColor: THEME.accentBorder },
+  pillWarn: { backgroundColor: THEME.warnSoft, borderColor: THEME.warnBorder },
+  pillPurple: { backgroundColor: THEME.purpleSoft, borderColor: THEME.purpleBorder },
+  pillMuted: { backgroundColor: THEME.surfaceElevated, borderColor: THEME.border },
+  pillOkText: { color: THEME.accent },
+  pillWarnText: { color: THEME.warn },
+  pillPurpleText: { color: THEME.purple },
+  pillMutedText: { color: THEME.textSecondary },
+  schedulerFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: THEME.space.sm,
+  },
+  schedulerLeft: { flexDirection: 'row', alignItems: 'center', gap: THEME.space.sm },
+  schedulerLabel: { color: THEME.textSecondary, fontSize: 12, fontWeight: '600' },
+  miniBadge: {
+    borderRadius: THEME.radius.pill,
+    borderWidth: 1,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+  },
+  miniBadgeText: { fontSize: 11, fontWeight: '600' },
+  tickRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  tickHint: { color: THEME.textMuted, fontSize: 12, fontWeight: '500' },
+  tickValue: {
+    color: THEME.info,
+    fontSize: 14,
+    fontWeight: '700',
+    fontVariant: ['tabular-nums'],
+  },
+  metrics: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: THEME.surface,
+    borderRadius: THEME.radius.lg,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    marginBottom: THEME.space.md,
+  },
+  metric: { flex: 1, alignItems: 'center', paddingVertical: THEME.space.md, minHeight: 56 },
+  metricDivider: { width: StyleSheet.hairlineWidth, height: 28, backgroundColor: THEME.border },
+  metricValue: {
+    color: THEME.textPrimary,
+    fontSize: 17,
+    fontWeight: '700',
+    fontVariant: ['tabular-nums'],
+  },
+  metricOk: { color: THEME.accent },
+  metricWarn: { color: THEME.warn },
+  metricPurple: { color: THEME.purple },
+  metricLabel: { color: THEME.textMuted, fontSize: 11, marginTop: 2, fontWeight: '600' },
+  bannerWarn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: THEME.space.sm,
+    backgroundColor: THEME.dangerSoft,
+    borderWidth: 1,
+    borderColor: THEME.dangerBorder,
+    borderRadius: THEME.radius.md,
+    paddingHorizontal: THEME.space.md,
+    paddingVertical: 11,
+    marginBottom: THEME.space.lg,
+  },
+  bannerWarnText: { color: THEME.danger, fontSize: 12, fontWeight: '600', flex: 1 },
+  bannerWork: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: THEME.space.sm,
+    backgroundColor: THEME.purpleSoft,
+    borderWidth: 1,
+    borderColor: THEME.purpleBorder,
+    borderRadius: THEME.radius.md,
+    paddingHorizontal: THEME.space.md,
+    paddingVertical: 11,
+    marginBottom: THEME.space.lg,
+  },
+  bannerWorkText: { color: THEME.purple, fontSize: 12, fontWeight: '600', flex: 1 },
+  sectionHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: THEME.space.sm,
+    marginBottom: THEME.space.sm + 2,
+  },
+  sectionLabel: {
+    color: THEME.textMuted,
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.9,
+  },
+  addPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: THEME.accentSoft,
+    borderWidth: 1,
+    borderColor: THEME.accentBorder,
+    borderRadius: THEME.radius.pill,
+    paddingHorizontal: 11,
+    paddingVertical: 5,
+  },
+  addPillText: { color: THEME.accent, fontSize: 12, fontWeight: '600' },
+  repoBlock: { marginBottom: THEME.space.md },
+  pressed: { opacity: 0.78 },
+  quickBar: {
+    flexDirection: 'row',
+    backgroundColor: THEME.surfaceElevated,
+    borderRadius: THEME.radius.md,
+    borderWidth: 1,
+    borderColor: THEME.border,
     overflow: 'hidden',
   },
-  quickHalf: {
+  quickBtn: {
     flex: 1,
-    paddingVertical: 10,
+    minHeight: 44,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  quickDivider: { width: 1, backgroundColor: '#ffffff33', marginVertical: 6 },
-  quickBtnText: { color: '#fff', fontWeight: '700', fontSize: 13 },
-  deleteBtn: {
-    paddingHorizontal: 16,
-    borderRadius: 10,
-    paddingVertical: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#21262d',
-    borderWidth: 1,
-    borderColor: '#f8514966',
-  },
-  deleteBtnText: { color: '#f85149', fontWeight: '700', fontSize: 13 },
+  quickPressed: { backgroundColor: THEME.surfacePressed },
+  quickDivider: { width: StyleSheet.hairlineWidth, backgroundColor: THEME.border, marginVertical: 8 },
+  quickBtnText: { color: THEME.textPrimary, fontWeight: '600', fontSize: 13 },
   emptyRepos: {
-    padding: 24,
+    padding: THEME.space.xl,
     alignItems: 'center',
-    backgroundColor: '#161b22',
-    borderRadius: 16,
+    backgroundColor: THEME.surface,
+    borderRadius: THEME.radius.lg,
     borderWidth: 1,
-    borderColor: '#30363d',
-    marginBottom: 16,
+    borderColor: THEME.border,
+    marginBottom: THEME.space.lg,
   },
-  emptyTitle: { color: '#e6edf3', fontSize: 20, fontWeight: '700' },
-  emptyText: { color: '#8b949e', textAlign: 'center', marginTop: 8, lineHeight: 20 },
+  emptyTitle: { color: THEME.textPrimary, fontSize: 17, fontWeight: '700' },
+  emptyText: {
+    color: THEME.textSecondary,
+    textAlign: 'center',
+    marginTop: THEME.space.sm,
+    lineHeight: 20,
+    fontSize: 13,
+  },
   cta: {
-    marginTop: 20,
-    backgroundColor: '#238636',
+    marginTop: THEME.space.lg,
+    backgroundColor: THEME.accent,
     paddingHorizontal: 20,
-    paddingVertical: 12,
-    borderRadius: 10,
+    minHeight: 44,
+    justifyContent: 'center',
+    borderRadius: THEME.radius.md,
   },
-  ctaText: { color: '#fff', fontWeight: '700' },
-  addRepoBtn: {
-    borderRadius: 12,
+  ctaText: { color: '#052E16', fontWeight: '700', fontSize: 14 },
+  viewAllRow: { flexDirection: 'row', alignItems: 'center', gap: 2 },
+  viewAll: { color: THEME.info, fontSize: 12, fontWeight: '600' },
+  panel: {
+    backgroundColor: THEME.surface,
+    borderRadius: THEME.radius.lg,
     borderWidth: 1,
-    borderColor: '#30363d',
-    borderStyle: 'dashed',
-    paddingVertical: 14,
-    alignItems: 'center',
-    marginBottom: 8,
+    borderColor: THEME.border,
+    padding: THEME.space.lg,
+    marginBottom: THEME.space.md,
   },
-  addRepoText: { color: '#3fb950', fontWeight: '700' },
+  emptyActivity: { color: THEME.textSecondary, fontSize: 13, lineHeight: 19 },
+  divider: { height: StyleSheet.hairlineWidth, backgroundColor: THEME.border },
+  activityRow: { flexDirection: 'row', alignItems: 'center', gap: THEME.space.md, paddingVertical: 10 },
+  activityIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+  },
+  activityIconOk: { backgroundColor: THEME.accentSoft, borderColor: THEME.accentBorder },
+  activityIconWarn: { backgroundColor: THEME.warnSoft, borderColor: THEME.warnBorder },
+  activityBody: { flex: 1 },
+  activityTitle: { color: THEME.textPrimary, fontWeight: '600', fontSize: 13 },
+  activitySub: { color: THEME.textSecondary, fontSize: 12, marginTop: 2 },
+  activityTime: { color: THEME.textMuted, fontSize: 11, fontVariant: ['tabular-nums'] },
 });

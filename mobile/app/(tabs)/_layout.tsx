@@ -1,45 +1,81 @@
 import { Tabs } from 'expo-router';
-import { StyleSheet, Text, type ColorValue } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-function TabIcon({ label, color }: { label: string; color: ColorValue }) {
-  return <Text style={[styles.icon, { color }]}>{label}</Text>;
-}
+import { AppIcon } from '@/components/AppIcon';
+import { THEME } from '@/constants/theme';
 
 export default function TabLayout() {
+  const insets = useSafeAreaInsets();
+
   return (
     <Tabs
       screenOptions={{
-        tabBarActiveTintColor: '#3fb950',
-        tabBarInactiveTintColor: '#6e7681',
+        tabBarActiveTintColor: THEME.accent,
+        tabBarInactiveTintColor: THEME.textMuted,
         tabBarStyle: {
-          backgroundColor: '#0d1117',
-          borderTopColor: '#21262d',
-          height: 64,
-          paddingTop: 6,
+          backgroundColor: THEME.bg,
+          borderTopColor: THEME.border,
+          borderTopWidth: 1,
+          height: 66 + insets.bottom,
+          paddingBottom: Math.max(insets.bottom, 8),
+          paddingTop: 8,
         },
-        tabBarLabelStyle: { fontSize: 11, fontWeight: '600' },
+        tabBarLabelStyle: {
+          fontSize: 10,
+          fontWeight: '600',
+          letterSpacing: 0.2,
+        },
         headerShown: false,
-        sceneStyle: { backgroundColor: '#0d1117' },
+        lazy: true,
+        freezeOnBlur: true,
+        sceneStyle: { backgroundColor: THEME.bg },
       }}
     >
       <Tabs.Screen
         name="index"
         options={{
-          title: 'Home',
-          tabBarIcon: ({ color }) => <TabIcon label="⌂" color={color} />,
+          title: 'Dashboard',
+          tabBarIcon: ({ color, focused }) => (
+            <AppIcon name="dashboard" color={color} size={20} active={focused} />
+          ),
         }}
       />
       <Tabs.Screen
-        name="activity"
+        name="github"
         options={{
-          title: 'Pipeline',
-          tabBarIcon: ({ color }) => <TabIcon label="◎" color={color} />,
+          title: 'GitHub',
+          tabBarIcon: ({ color, focused }) => (
+            <AppIcon name="github" color={color} size={20} active={focused} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="charge"
+        options={{
+          title: 'Charge',
+          tabBarIcon: ({ color, focused }) => (
+            <AppIcon name="charge" color={color} size={20} active={focused} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="notification"
+        options={{
+          title: 'Notification',
+          tabBarIcon: ({ color, focused }) => (
+            <AppIcon name="notification" color={color} size={20} active={focused} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="settings"
+        options={{
+          title: 'Settings',
+          tabBarIcon: ({ color, focused }) => (
+            <AppIcon name="settings" color={color} size={20} active={focused} />
+          ),
         }}
       />
     </Tabs>
   );
 }
-
-const styles = StyleSheet.create({
-  icon: { fontSize: 20, lineHeight: 22 },
-});

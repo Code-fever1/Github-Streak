@@ -53,13 +53,20 @@ export async function fetchBranchCommitDays(
   const sinceMs = since.getTime();
   let page = 1;
   const perPage = 100;
-  const maxPages = 30;
+  const maxPages = 8;
 
   while (page <= maxPages) {
     const url =
       `https://api.github.com/repos/${project.owner}/${project.repo}/commits` +
       `?sha=${encodeURIComponent(project.branch)}&per_page=${perPage}&page=${page}`;
-    const res = await fetch(url, { headers: await headers(project) });
+    const ctrl = new AbortController();
+    const timeout = setTimeout(() => ctrl.abort(), 20_000);
+    let res: Response;
+    try {
+      res = await fetch(url, { headers: await headers(project), signal: ctrl.signal });
+    } finally {
+      clearTimeout(timeout);
+    }
     if (!res.ok) {
       let msg = `GitHub commits API failed (${res.status})`;
       try {
@@ -124,4 +131,110 @@ export function historySinceDays(daysBack: number): Date {
   d.setHours(0, 0, 0, 0);
   d.setDate(d.getDate() - daysBack);
   return d;
+}
+
+export interface StreakDayCell {
+  date: string;
+  shortDay: string;
+  total: number;
+  app: number;
+  other: number;
+  isToday: boolean;
+}
+
+export interface StreakSummary {
+  currentStreak: number;
+  bestStreak: number;
+  todaySecured: boolean;
+  todayTotal: number;
+  todayApp: number;
+  todayOther: number;
+  last7Days: StreakDayCell[];
+}
+
+const SHORT_DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const;
+
+function localKey(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function parseLocalKey(key: string): Date {
+  const [y, m, d] = key.split('-').map((n) => Number(n));
+  return new Date(y, (m || 1) - 1, d || 1);
+}
+
+/** Compute current/best streaks and the trailing 7-day breakdown from GitHub branch stats. */
+export function computeStreakSummary(days: DayCommitStats[], now = new Date()): StreakSummary {
+  const byDate = new Map<string, DayCommitStats>(days.map((d) => [d.date, d]));
+
+  const today = new Date(now);
+  today.setHours(0, 0, 0, 0);
+  const todayKey = localKey(today);
+  const todayStats = byDate.get(todayKey);
+
+  const todayTotal = todayStats?.total ?? 0;
+  const todayApp = todayStats?.app ?? 0;
+  const todayOther = todayStats?.other ?? 0;
+  const todaySecured = todayTotal > 0;
+
+  let currentStreak = 0;
+  const cursor = new Date(today);
+  if (!todaySecured) {
+    cursor.setDate(cursor.getDate() - 1);
+  }
+  for (let i = 0; i < 366; i++) {
+    const entry = byDate.get(localKey(cursor));
+    if (!entry || entry.total <= 0) break;
+    currentStreak += 1;
+    cursor.setDate(cursor.getDate() - 1);
+  }
+
+  const activeDates = days
+    .filter((d) => d.total > 0)
+    .map((d) => d.date)
+    .sort((a, b) => a.localeCompare(b));
+
+  let bestStreak = currentStreak;
+  let run = 0;
+  let expectedNextKey: string | null = null;
+  for (const key of activeDates) {
+    if (key === expectedNextKey) {
+      run += 1;
+    } else if (run === 0 || key > (expectedNextKey ?? '')) {
+      run = 1;
+    }
+    if (run > bestStreak) bestStreak = run;
+    const nextDate = parseLocalKey(key);
+    nextDate.setDate(nextDate.getDate() + 1);
+    expectedNextKey = localKey(nextDate);
+  }
+
+  const last7Days: StreakDayCell[] = [];
+  for (let offset = 6; offset >= 0; offset--) {
+    const d = new Date(today);
+    d.setDate(d.getDate() - offset);
+    const key = localKey(d);
+    const stats = byDate.get(key);
+    last7Days.push({
+      date: key,
+      shortDay: SHORT_DAYS[d.getDay()],
+      total: stats?.total ?? 0,
+      app: stats?.app ?? 0,
+      other: stats?.other ?? 0,
+      isToday: offset === 0,
+    });
+  }
+
+  return {
+    currentStreak,
+    bestStreak,
+    todaySecured,
+    todayTotal,
+    todayApp,
+    todayOther,
+    last7Days,
+  };
 }

@@ -5,10 +5,25 @@ import { commitsMadeToday } from './planner';
 import { subscribePipeline } from './pipeline';
 import { runDueTicks } from './scheduler';
 import { loadProjects, getTodayPlan } from './storage';
-import { markCommittedToday, publishSendStatus, scheduleDayReminders, startKeeperService } from './device-notify';
+import { applyChargeHold, getChargeHoldStatus, loadChargeHoldSettings } from './charge-hold';
+import {
+  getRootMonitorStatus,
+  isSuAvailable,
+  loadNotificationAlertSettings,
+  saveNotificationAlertSettings,
+} from './notification-alerts';
+import {
+  markCommittedToday,
+  publishSendStatus,
+  scheduleDayReminders,
+  stopKeeperService,
+  syncNextWakeAlarm,
+} from './device-notify';
 
 export const BACKGROUND_TASK = 'streak-keeper-sync';
 const HEADLESS_TASK = 'StreakKeeperTask';
+
+export { syncNextWakeAlarm };
 
 async function runKeeperTick() {
   await runDueTicks();
@@ -19,14 +34,24 @@ if (Platform.OS !== 'web') {
   TaskManager.defineTask(BACKGROUND_TASK, async () => {
     try {
       await runKeeperTick();
+      await syncNextWakeAlarm();
       return BackgroundFetch.BackgroundFetchResult.NewData;
     } catch {
       return BackgroundFetch.BackgroundFetchResult.Failed;
+    } finally {
+      stopKeeperService(true);
     }
   });
 
   AppRegistry.registerHeadlessTask(HEADLESS_TASK, () => async () => {
-    await runKeeperTick();
+    console.log('[Veyon] StreakKeeperTask start');
+    try {
+      await runKeeperTick();
+    } finally {
+      await syncNextWakeAlarm().catch(() => {});
+      console.log('[Veyon] StreakKeeperTask done; scheduling next wake and exiting');
+      stopKeeperService(true);
+    }
   });
 }
 
@@ -43,10 +68,8 @@ async function startAndroidKeeper(): Promise<void> {
       await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS);
     }
   } catch {
-    // continue; the service still starts
+    // continue; reminders & alarms still register
   }
-  startKeeperService();
-  publishSendStatus();
   scheduleDayReminders();
   const projects = await loadProjects();
   for (const project of projects) {
@@ -55,6 +78,27 @@ async function startAndroidKeeper(): Promise<void> {
       markCommittedToday();
       break;
     }
+  }
+  await syncNextWakeAlarm();
+  try {
+    if (await isSuAvailable()) {
+      const [charge, cStat, alerts, rStat] = await Promise.all([
+        loadChargeHoldSettings(),
+        getChargeHoldStatus(),
+        loadNotificationAlertSettings(),
+        getRootMonitorStatus(),
+      ]);
+      if (charge.enabled) {
+        await applyChargeHold(charge);
+      } else if (cStat?.running === '1') {
+        await applyChargeHold(charge);
+      }
+      if (alerts.enabled && !rStat?.confirmed) {
+        await saveNotificationAlertSettings(alerts);
+      }
+    }
+  } catch {
+    // Non-fatal: root daemon sync is best-effort on launch.
   }
 }
 
@@ -74,17 +118,12 @@ export async function registerBackgroundTask(): Promise<void> {
   if (Platform.OS === 'web') return;
   await startAndroidKeeper();
   try {
-    const status = await BackgroundFetch.getStatusAsync();
-    if (status === BackgroundFetch.BackgroundFetchStatus.Restricted) return;
+    // Replace any legacy polling BackgroundFetch task with exact wake alarms.
     const registered = await TaskManager.isTaskRegisteredAsync(BACKGROUND_TASK);
-    if (!registered) {
-      await BackgroundFetch.registerTaskAsync(BACKGROUND_TASK, {
-        minimumInterval: 15 * 60,
-        stopOnTerminate: false,
-        startOnBoot: true,
-      });
+    if (registered) {
+      await BackgroundFetch.unregisterTaskAsync(BACKGROUND_TASK).catch(() => {});
     }
   } catch {
-    // Background fetch is a backup; the foreground service is the real path.
+    // Ignore if TaskManager is unavailable.
   }
 }

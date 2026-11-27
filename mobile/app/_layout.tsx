@@ -6,6 +6,7 @@ import { View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import 'react-native-reanimated';
 
+import { THEME } from '@/constants/theme';
 import { ProjectsProvider } from '@/context/ProjectsContext';
 import { registerBackgroundTask } from '@/lib/background';
 import { useAutoScheduler } from '@/hooks/useAutoScheduler';
@@ -22,11 +23,11 @@ const theme = {
   ...DarkTheme,
   colors: {
     ...DarkTheme.colors,
-    background: '#0d1117',
-    card: '#161b22',
-    text: '#e6edf3',
-    border: '#30363d',
-    primary: '#3fb950',
+    background: THEME.bg,
+    card: THEME.surface,
+    text: THEME.textPrimary,
+    border: THEME.border,
+    primary: THEME.accent,
   },
 };
 
@@ -38,40 +39,33 @@ function SchedulerHost({ children }: { children: ReactNode }) {
 export default function RootLayout() {
   useEffect(() => {
     SplashScreen.hideAsync().catch(() => {});
-    registerBackgroundTask().catch(() => {});
+    const t = setTimeout(() => registerBackgroundTask().catch(() => {}), 1500);
+    return () => clearTimeout(t);
   }, []);
 
   return (
     <SafeAreaProvider>
-      <View style={{ flex: 1, backgroundColor: '#0d1117' }}>
+      <View style={{ flex: 1, backgroundColor: THEME.bg }}>
         <ProjectsProvider>
           <SchedulerHost>
             <ThemeProvider value={theme}>
               <Stack>
                 <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
                 <Stack.Screen
-                  name="settings"
-                  options={{
-                    title: 'Settings',
-                    headerStyle: { backgroundColor: '#161b22' },
-                    headerTintColor: '#e6edf3',
-                  }}
-                />
-                <Stack.Screen
                   name="add-project"
                   options={{
                     title: 'Add repo',
                     presentation: 'modal',
-                    headerStyle: { backgroundColor: '#161b22' },
-                    headerTintColor: '#e6edf3',
+                    headerStyle: { backgroundColor: THEME.surface },
+                    headerTintColor: THEME.textPrimary,
                   }}
                 />
                 <Stack.Screen
                   name="project/[id]"
                   options={{
                     title: 'Project',
-                    headerStyle: { backgroundColor: '#161b22' },
-                    headerTintColor: '#e6edf3',
+                    headerStyle: { backgroundColor: THEME.surface },
+                    headerTintColor: THEME.textPrimary,
                   }}
                 />
               </Stack>

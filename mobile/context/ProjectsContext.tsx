@@ -4,6 +4,7 @@ import { DEFAULT_SCHEDULE, DEFAULT_TIMER } from '@/lib/types';
 import { parseRepoInput } from '@/lib/repo-url';
 import { generateEd25519KeyPair } from '@/lib/ssh-key';
 import { runQuickCommit, runScheduledTick, flushQueue } from '@/lib/scheduler';
+import { syncNextWakeAlarm } from '@/lib/device-notify';
 import { buildPipelineViews, subscribePipeline, type PipelineSnapshot } from '@/lib/pipeline';
 import {
   clearQueueJobErrors,
@@ -31,6 +32,55 @@ import {
   mergeCommitDays,
   type DayCommitStats,
 } from '@/lib/github-commits';
+
+function projectsUnchanged(a: Project[], b: Project[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].id !== b[i].id || a[i].enabled !== b[i].enabled || a[i].name !== b[i].name) return false;
+  }
+  return true;
+}
+
+function logsUnchanged(a: ActivityLog[], b: ActivityLog[]): boolean {
+  if (a.length !== b.length) return false;
+  if (a.length === 0) return true;
+  return a[0].id === b[0].id && a[0].success === b[0].success;
+}
+
+function queueUnchanged(a: QueuedJob[], b: QueuedJob[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].id !== b[i].id || a[i].n !== b[i].n || a[i].status !== b[i].status || a[i].lastError !== b[i].lastError) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function ticksUnchanged(a: Record<string, string | null>, b: Record<string, string | null>): boolean {
+  const aKeys = Object.keys(a);
+  const bKeys = Object.keys(b);
+  if (aKeys.length !== bKeys.length) return false;
+  return aKeys.every((key) => a[key] === b[key]);
+}
+
+function pipelineUnchanged(a: PipelineSnapshot[], b: PipelineSnapshot[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i];
+    const y = b[i];
+    if (
+      x.projectId !== y.projectId ||
+      x.queued !== y.queued ||
+      x.writing !== y.writing ||
+      x.waitingPush !== y.waitingPush ||
+      x.pushing !== y.pushing
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
 
 interface ProjectsContextValue {
   projects: Project[];
@@ -91,19 +141,45 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
   const githubFetchAt = useRef(0);
 
   const refresh = useCallback(async () => {
-    const p = await loadProjects();
-    const [l, ticks, jobs] = await Promise.all([loadLogs(), loadAllLastTicks(p), loadQueue()]);
-    setProjects(p);
-    setLogs(l.filter((entry) => !entry.message.startsWith('Queued')));
-    setLastTicks(ticks);
-    queueRef.current = jobs;
-    setQueue(jobs);
-    setPending(queuedUnits(jobs));
-    setPipeline(buildPipelineViews(remainingMap(jobs)));
+    try {
+      const p = await loadProjects();
+      const [l, ticks, jobs] = await Promise.all([loadLogs(), loadAllLastTicks(p), loadQueue()]);
+      const visibleLogs = l.filter((entry) => !entry.message.startsWith('Queued'));
+      setProjects((prev) => (projectsUnchanged(prev, p) ? prev : p));
+      setLogs((prev) => (logsUnchanged(prev, visibleLogs) ? prev : visibleLogs));
+      setLastTicks((prev) => (ticksUnchanged(prev, ticks) ? prev : ticks));
+      queueRef.current = jobs;
+      setQueue((prev) => (queueUnchanged(prev, jobs) ? prev : jobs));
+      setPending(queuedUnits(jobs));
+      setPipeline((prev) => {
+        const next = buildPipelineViews(remainingMap(jobs));
+        return pipelineUnchanged(prev, next) ? prev : next;
+      });
+    } catch {
+      // Still unblock UI if storage read fails on device.
+      setProjects([]);
+      setLogs([]);
+      setQueue([]);
+      setPending(0);
+      setPipeline([]);
+    }
   }, []);
 
   useEffect(() => {
-    refresh().finally(() => setLoading(false));
+    let cancelled = false;
+    const failOpen = setTimeout(() => {
+      if (!cancelled) setLoading(false);
+    }, 6000);
+    refresh()
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+        clearTimeout(failOpen);
+      });
+    return () => {
+      cancelled = true;
+      clearTimeout(failOpen);
+    };
   }, [refresh]);
 
   useEffect(() => {
@@ -157,6 +233,7 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
     const next = [...(await loadProjects()), project];
     await saveProjects(next);
     setProjects(next);
+    syncNextWakeAlarm().catch(() => {});
     return { project, publicKey: pair.publicKeyOpenSSH };
   }, []);
 
@@ -182,18 +259,21 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
     setProjects(next);
     setQueue(jobs);
     setPending(queuedUnits(jobs));
+    syncNextWakeAlarm().catch(() => {});
   }, [projects]);
 
   const toggleProject = useCallback(async (id: string) => {
     const next = projects.map((p) => (p.id === id ? { ...p, enabled: !p.enabled } : p));
     await saveProjects(next);
     setProjects(next);
+    syncNextWakeAlarm().catch(() => {});
   }, [projects]);
 
   const updateTimer = useCallback(async (id: string, timer: TimerConfig) => {
     const next = projects.map((p) => (p.id === id ? { ...p, timer } : p));
     await saveProjects(next);
     setProjects(next);
+    syncNextWakeAlarm().catch(() => {});
   }, [projects]);
 
   const getPlan = useCallback((project: Project) => getTodayPlan(project), []);
@@ -205,6 +285,10 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
     return log;
   }, [refresh]);
 
+  const projectsRef = useRef(projects);
+  projectsRef.current = projects;
+  const projectKey = projects.map((p) => p.id).join('|');
+
   const refreshGithubHistory = useCallback(async (force = false) => {
     const now = Date.now();
     if (!force && now - githubFetchAt.current < 15_000) return;
@@ -215,7 +299,7 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
       const since = historySinceDays(GITHUB_HISTORY_WEEKS * 7);
       const rows: DayCommitStats[][] = [];
       let lastErr: string | null = null;
-      for (const project of projects) {
+      for (const project of projectsRef.current) {
         if (!(await hasGithubToken(project.id))) continue;
         try {
           rows.push(await fetchBranchCommitDays(project, since));
@@ -232,7 +316,7 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
     } finally {
       setGithubHistoryLoading(false);
     }
-  }, [projects]);
+  }, []);
 
   const quickCommit = useCallback(async (project: Project, count = 1) => {
     const log = await runQuickCommit(project, count);
@@ -260,10 +344,12 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
   }, [refresh]);
 
   useEffect(() => {
-    if (!loading && projects.length > 0) {
+    if (loading || projects.length === 0) return;
+    const t = setTimeout(() => {
       refreshGithubHistory().catch(() => {});
-    }
-  }, [loading, projects.length, refreshGithubHistory]);
+    }, 1200);
+    return () => clearTimeout(t);
+  }, [loading, projectKey, refreshGithubHistory]);
 
   const value = useMemo(
     () => ({
